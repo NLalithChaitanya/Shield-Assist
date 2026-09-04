@@ -1,0 +1,54 @@
+# Environment secrets
+.env
+.env.local
+.env.*.local
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+
+# SQLite databases (local data)
+data/*.db
+data/*.db-wal
+data/*.db-shm
+shield_assist.db
+
+# Uploads (local evidence files)
+data/uploads/
+
+# Captured webhooks (local debug data)
+data/captured_webhooks/
+
+# ML model artifacts (trained, should not be regenerated from scratch)
+models/*.pkl
+models/__pycache__/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Node (frontend)
+frontend/node_modules/
+frontend/dist/
+frontend/dist-ssr/
+frontend/*.local
+
+# Temp files
+tmp_*.py
+_*.py
+_*.js
+_*.tsx
+_*.b64
+_*.json

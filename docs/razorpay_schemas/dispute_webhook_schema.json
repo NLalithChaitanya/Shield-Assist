@@ -1,0 +1,79 @@
+{
+  "_meta": {
+    "source": "https://razorpay.com/docs/webhooks/disputes/",
+    "verified_on": "2026-08-27",
+    "note": "Sourced from Razorpay's own sample payloads for payment.dispute.created. Field names are copied exactly — including 'term_and_conditions' (singular 'term'), which differs from a common assumption of 'terms_and_conditions'."
+  },
+  "event": "payment.dispute.created",
+  "top_level_shape": {
+    "entity": "event",
+    "account_id": "acc_CFvOKjkTwf3GQy",
+    "event": "payment.dispute.created",
+    "contains": ["payment", "dispute"],
+    "payload": {
+      "payment": { "entity": "<Payment entity — see payment_entity_shape>" },
+      "dispute": { "entity": "<Dispute entity — see dispute_entity_shape>" }
+    },
+    "created_at": 1589907977
+  },
+  "payment_entity_shape": {
+    "id": "pay_EFtmUsbwpXwBHI",
+    "entity": "payment",
+    "amount": 5297600,
+    "currency": "INR",
+    "status": "captured",
+    "order_id": "order_EFtkA6f5jdkfud",
+    "method": "card",
+    "amount_refunded": 700000,
+    "refund_status": "partial",
+    "captured": true,
+    "email": "gaurav.kumar@example.com",
+    "contact": "+919900000000",
+    "created_at": 1581525157,
+    "_note": "Only fields Shield Assist actually consumes are guaranteed to be read; the rest pass through untouched."
+  },
+  "dispute_entity_shape": {
+    "id": "disp_EsIAlDcoUr8CaQ",
+    "entity": "dispute",
+    "payment_id": "pay_EFtmUsbwpXwBHI",
+    "amount": 39000,
+    "currency": "INR",
+    "amount_deducted": 0,
+    "reason_code": "processed_invalid_expired_card",
+    "respond_by": 1590431400,
+    "status": "open",
+    "phase": "chargeback",
+    "created_at": 1589907957,
+    "evidence": "<see evidence_shape>",
+    "_field_notes": {
+      "amount": "integer, in currency subunits (paise for INR) — divide by 100 for rupees",
+      "respond_by": "unix timestamp — deadline to submit evidence, used for priority/urgency scoring",
+      "reason_code": "Razorpay's native reason code. For the 6 in-scope codes, map RZP01/RZP04/RZP05/RZP06 to whatever the live enum actually emits — Razorpay's public webhook sample uses generic examples like 'processed_invalid_expired_card', so this mapping MUST be re-verified once real test-mode disputes start arriving in Phase 0's Task 4.",
+      "phase": "chargeback | fraud | pre_arbitration | arbitration — service disputes we care about should generally be phase=chargeback"
+    }
+  },
+  "evidence_shape": {
+    "amount": 39000,
+    "summary": null,
+    "shipping_proof": null,
+    "billing_proof": null,
+    "cancellation_proof": null,
+    "customer_communication": null,
+    "proof_of_service": null,
+    "explanation_letter": null,
+    "refund_confirmation": null,
+    "access_activity_log": null,
+    "refund_cancellation_policy": null,
+    "term_and_conditions": null,
+    "others": null,
+    "submitted_at": null,
+    "_note": "Each populated slot (after evidence is attached) becomes either a list of document_id strings, or for 'others' a list of {type, document_ids} objects. All fields are null until the merchant submits."
+  },
+  "other_dispute_webhook_events": [
+    "payment.dispute.won",
+    "payment.dispute.lost",
+    "payment.dispute.closed",
+    "payment.dispute.under_review",
+    "payment.dispute.action_required"
+  ]
+}

@@ -1,0 +1,28 @@
+
+<!DOCTYPE html>
+<html>
+<head><title>Shield Assist — Test Checkout</title></head>
+<body>
+  <h2>Phase 0 Webhook Test Payment</h2>
+  <button id="pay-btn">Pay ₹500 (Test Mode)</button>
+  <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
+  <script>
+    document.getElementById('pay-btn').onclick = function () {
+      var rzp = new Razorpay({
+        key: "rzp_test_TUg2wktt99NWIv",
+        amount: "50000",
+        currency: "INR",
+        order_id: "order_TUiBjkC9MRVZKf",
+        name: "Shield Assist",
+        description: "Phase 0 webhook plumbing test",
+        handler: function (response) {
+          document.body.innerHTML =
+            "<h3>Payment done: " + response.razorpay_payment_id + "</h3>" +
+            "<p>Check your uvicorn terminal for the webhook.</p>";
+        },
+      });
+      rzp.open();
+    };
+  </script>
+</body>
+</html>

@@ -1,0 +1,20 @@
+# requirements.txt (Phase 2 v2)
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+python-multipart==0.0.9
+python-dotenv==1.0.1
+sse-starlette>=1.4.0,<1.5.0
+requests>=2.31.0
+httpx>=0.25.0
+
+# AI provider (Gemini — free tier)
+google-genai>=1.0.0
+
+# ML stack (Phase 1)
+scikit-learn
+pandas
+numpy
+
+# Document quality detection (Laplacian variance)
+Pillow>=10.0.0
+PyMuPDF>=1.23.0

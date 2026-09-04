@@ -1,0 +1,23 @@
+INFO:     Will watch for changes in these directories: ['D:\\Shield Assist Razorpay']
+INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
+INFO:     Started reloader process [5876] using WatchFiles
+INFO:     Started server process [9060]
+INFO:     Waiting for application startup.
+INFO:shield_assist.db:SQLite 3.45.1 (RETURNING supported)
+INFO:shield_assist.jobs:Worker 0 starting
+INFO:shield_assist.jobs:Worker 1 starting
+INFO:shield_assist.jobs:JobQueue started with 2 workers
+INFO:shield_assist.app:Shield Assist started — workers running
+INFO:     Application startup complete.
+INFO:shield_assist.app:Document quality: computed='clear' (variance=647.6, file=doc_40f30e570da7.pdf)
+INFO:shield_assist.app:Razorpay API client initialized (test mode)
+INFO:shield_assist.razorpay_client:Uploading document to Razorpay: doc_40f30e570da7.pdf (application/pdf, purpose=dispute_evidence)
+INFO:shield_assist.razorpay_client:Document uploaded: local=doc_40f30e570da7.pdf razorpay=doc_TXfb7k9PcGIPfz (purpose=dispute_evidence)
+INFO:shield_assist.app:Razorpay document uploaded: local=doc_40f30e570da7 razorpay=doc_TXfb7k9PcGIPfz
+INFO:shield_assist.app:Document quality: merchant override 'degraded' (computed='clear', variance=647.6)
+INFO:shield_assist.razorpay_client:Uploading document to Razorpay: doc_ff035a9c3c9e.pdf (application/pdf, purpose=dispute_evidence)
+INFO:shield_assist.razorpay_client:Document uploaded: local=doc_ff035a9c3c9e.pdf razorpay=doc_TXfbS8GixhuhXf (purpose=dispute_evidence)
+INFO:shield_assist.app:Razorpay document uploaded: local=doc_ff035a9c3c9e razorpay=doc_TXfbS8GixhuhXf
+ERROR:shield_assist.app:Webhook signature verification failed — rejecting.
+ERROR:shield_assist.app:Webhook signature verification failed — rejecting.
+WARNING:  WatchFiles detected changes in 'tests\test_quality_detection.py'. Reloading...

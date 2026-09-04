@@ -1,0 +1,103 @@
+{
+  "report_type": "shield_assist_evaluation",
+  "timestamp": "2026-09-04T15:20:03Z",
+  "tests": {
+    "total": 0,
+    "passed": 0,
+    "failed": 0,
+    "skipped": 0,
+    "suites": {
+      "quality_detection": {
+        "passed": 0,
+        "failed": 0,
+        "skipped": 0,
+        "exit_code": 0
+      },
+      "razorpay_client": {
+        "passed": 0,
+        "failed": 0,
+        "skipped": 0,
+        "exit_code": 0
+      },
+      "razorpay_integration": {
+        "passed": 0,
+        "failed": 0,
+        "skipped": 0,
+        "exit_code": 0
+      },
+      "safety_gate": {
+        "passed": 0,
+        "failed": 0,
+        "skipped": 0,
+        "exit_code": 0
+      },
+      "resilience": {
+        "passed": 0,
+        "failed": 0,
+        "skipped": 0,
+        "exit_code": 0
+      }
+    }
+  },
+  "smoke_test": {
+    "passed": 54,
+    "failed": 0,
+    "exit_code": 0,
+    "success": true
+  },
+  "ml_evaluation": {
+    "model_type": "calibrated",
+    "dataset": {
+      "test_size": 901
+    },
+    "classifier": {
+      "precision": 0.7761,
+      "recall": 0.8421,
+      "f1": 0.8078,
+      "roc_auc": 0.8813,
+      "pr_auc": 0.7253,
+      "confusion_matrix": {
+        "tn": 594,
+        "fp": 60,
+        "fn": 39,
+        "tp": 208
+      }
+    }
+  },
+  "gate_evaluation": {
+    "gate_threshold": 0.5,
+    "precision": 0.9103,
+    "recall": 0.8219,
+    "f1": 0.8638,
+    "fp_count": 20,
+    "fp_rate": 0.0897,
+    "predicted_win_count": 223,
+    "approved_count": 223
+  },
+  "adversarial_tests": {
+    "passed": 23,
+    "failed": 0,
+    "total": 23,
+    "success": true
+  },
+  "evidence_integrity": {
+    "passed": 3,
+    "failed": 0,
+    "success": true
+  },
+  "human_approval": {
+    "passed": 2,
+    "failed": 0,
+    "success": true
+  },
+  "razorpay_integration": {
+    "configured": false,
+    "mode": "not_configured",
+    "authentication": "NOT_CONFIGURED",
+    "documents_api": "CLIENT_IMPLEMENTED",
+    "webhook": "HANDLER_IMPLEMENTED",
+    "contest_api": "CLIENT_IMPLEMENTED",
+    "dispute_simulator": "IMPLEMENTED",
+    "contest_e2e_submission": "KNOWN_TEST_MODE_LIMITATION"
+  }
+}

@@ -1,0 +1,83 @@
+TechVista Solutions Pvt. Ltd.
+Support Correspondence — Order ORD-2026-005589
+
+═══════════════════════════════════════════════════════
+EMAIL 1 — Order Confirmation
+═══════════════════════════════════════════════════════
+
+From: orders@techvistasolutions.in
+To: priya.nair@email.com
+Date: 28 July 2026, 14:23 IST
+Subject: Order Confirmed — ORD-2026-005589 | Annual SaaS Subscription — Pro Plan
+
+Dear Priya Nair,
+
+Thank you for your order with TechVista Solutions.
+
+Order Details:
+  Order ID:        ORD-2026-005589
+  Service:         Annual SaaS Subscription — Pro Plan
+  Duration:        12 months
+  Amount Paid:     Rs. 42,000.00 (via NEFT/RTGS)
+  Transaction Ref: TXN994820194
+
+Your service access will be provisioned and delivery confirmation will be sent within 5 business days of payment verification.
+
+If you have any questions, please contact our support team at support@techvistasolutions.in or call +91 (080) 555-0192.
+
+Thank you for choosing TechVista Solutions.
+
+Warm regards,
+Orders Team
+TechVista Solutions Pvt. Ltd.
+
+═══════════════════════════════════════════════════════
+EMAIL 2 — Service Delivery Confirmation
+═══════════════════════════════════════════════════════
+
+From: support@techvistasolutions.in
+To: priya.nair@email.com
+Date: 03 August 2026, 10:15 IST
+Subject: Your service is live! — ORD-2026-005589
+
+Dear Priya Nair,
+
+Great news — your Annual SaaS Subscription — Pro Plan has been successfully provisioned and is now active.
+
+Service Details:
+  Order ID:           ORD-2026-005589
+  Activation Date:    03 August 2026
+  Expiry Date:        02 August 2027
+  Plan:               Pro (Enterprise Cloud Access, Priority Support, Automated Testing Suite)
+
+You can log in at https://app.techvistasolutions.in using the credentials sent to your registered email.
+
+Your Priority Support channel is now active — response time within 4 business hours for any technical queries.
+
+If you experience any issues with access, please reply to this email or call us at +91 (080) 555-0192.
+
+Best regards,
+Customer Success Team
+TechVista Solutions Pvt. Ltd.
+
+═══════════════════════════════════════════════════════
+CHAT LOG — Follow-up Confirmation
+═══════════════════════════════════════════════════════
+
+[03 August 2026, 11:42 IST]
+
+Priya Nair: Hi, I just got the activation email for Order ORD-2026-005589. Can you confirm everything is set up correctly?
+
+TechVista Support (Rahul): Hello Priya! Yes, I can confirm your Pro Plan subscription is fully active. Order ORD-2026-005589 — 12-month Enterprise Cloud Access with Priority Support and the Automated Testing Suite. Everything is provisioned on our end.
+
+Priya Nair: Great, thank you. And the subscription runs until August 2027?
+
+TechVista Support (Rahul): That's correct — valid from 03 August 2026 through 02 August 2027. You'll receive a renewal reminder 30 days before expiry. Is there anything else I can help with?
+
+Priya Nair: No, that's all. Thanks for the quick confirmation!
+
+TechVista Support (Rahul): You're welcome, Priya! Don't hesitate to reach out if you need anything. Have a great day!
+
+═══════════════════════════════════════════════════════
+END OF CORRESPONDENCE
+═══════════════════════════════════════════════════════

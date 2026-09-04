@@ -1,0 +1,151 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+@import "tailwindcss";
+
+/* ─── Design Tokens: Light Mode ─── */
+:root {
+  --surface: #F7F8FA;
+  --surface-raised: #FFFFFF;
+  --ink: #12161C;
+  --ink-muted: #5B6472;
+  --line: #E2E5EA;
+  --signal: #1F6FEB;
+  --money: #0F7A4A;
+  --urgent: #C4331F;
+  --caution: #B5750B;
+  --surface-sunken: #F0F1F4;
+  --surface-overlay: rgba(0, 0, 0, 0.04);
+  --ink-faint: #9BA3B0;
+  --signal-bg: #EBF3FE;
+  --money-bg: #E8F5EE;
+  --urgent-bg: #FDECEA;
+  --caution-bg: #FEF7E8;
+}
+
+/* ─── Design Tokens: Dark Mode ─── */
+.dark {
+  --surface: #0B0D11;
+  --surface-raised: #14171D;
+  --ink: #E7E9ED;
+  --ink-muted: #8A94A3;
+  --line: #242830;
+  --signal: #4B8CFF;
+  --money: #2FA968;
+  --urgent: #E35C46;
+  --caution: #D99A2B;
+  --surface-sunken: #080A0E;
+  --surface-overlay: rgba(255, 255, 255, 0.04);
+  --ink-faint: #5A6373;
+  --signal-bg: rgba(75, 140, 255, 0.1);
+  --money-bg: rgba(47, 169, 104, 0.1);
+  --urgent-bg: rgba(227, 92, 70, 0.1);
+  --caution-bg: rgba(217, 154, 43, 0.1);
+}
+
+/* ─── Base ─── */
+html {
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background: var(--surface);
+  color: var(--ink);
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+/* ─── Typography: IBM Plex Mono for data ─── */
+.font-data {
+  font-family: 'IBM Plex Mono', 'SF Mono', 'Consolas', monospace;
+}
+
+/* ─── Semantic Color Classes ─── */
+.text-surface { color: var(--surface); }
+.text-surface-raised { color: var(--surface-raised); }
+.text-ink { color: var(--ink); }
+.text-ink-muted { color: var(--ink-muted); }
+.text-ink-faint { color: var(--ink-faint); }
+.text-signal { color: var(--signal); }
+.text-money { color: var(--money); }
+.text-urgent { color: var(--urgent); }
+.text-caution { color: var(--caution); }
+
+.bg-surface { background-color: var(--surface); }
+.bg-surface-raised { background-color: var(--surface-raised); }
+.bg-surface-sunken { background-color: var(--surface-sunken); }
+.bg-surface-overlay { background-color: var(--surface-overlay); }
+.bg-signal-bg { background-color: var(--signal-bg); }
+.bg-money-bg { background-color: var(--money-bg); }
+.bg-urgent-bg { background-color: var(--urgent-bg); }
+.bg-caution-bg { background-color: var(--caution-bg); }
+
+.border-line { border-color: var(--line); }
+.ring-signal { --tw-ring-color: var(--signal); }
+
+/* ─── Scrollbar ─── */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--line); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--ink-muted); }
+
+/* ─── Focus ring ─── */
+*:focus-visible {
+  outline: 2px solid var(--signal);
+  outline-offset: 2px;
+}
+
+/* ─── Reduced motion ─── */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* ─── Score bar animation ─── */
+@keyframes score-fill {
+  from { width: 0%; }
+}
+
+.score-bar-animate {
+  animation: score-fill 600ms ease-out forwards;
+}
+
+/* ─── Pulse for live indicator ─── */
+@keyframes live-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+.live-pulse {
+  animation: live-pulse 2s ease-in-out infinite;
+}
+
+/* ─── Number tick animation ─── */
+@keyframes count-up {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.count-animate {
+  animation: count-up 300ms ease-out;
+}
+
+/* ─── SSE stream text ─── */
+@keyframes stream-cursor {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
+.stream-cursor::after {
+  content: '|';
+  color: var(--signal);
+  animation: stream-cursor 1s step-end infinite;
+  margin-left: 1px;
+}

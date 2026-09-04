@@ -1,0 +1,61 @@
+TechVista Solutions Pvt. Ltd.
+CIN: U72900KA2021PTC123456
+Registered Office: 45th Floor, Prestige Trade Tower, Palace Road, Bangalore 560001
+Support Desk: support@techvistasolutions.in | +91 (080) 555-0192
+
+TERMS AND CONDITIONS OF SERVICE
+Effective Date: 01 January 2026
+Last Updated: 01 January 2026
+
+1. ACCEPTANCE OF TERMS
+By placing an order for TechVista Solutions' software services, the customer ("Client") agrees to be bound by these Terms and Conditions. These terms apply to all orders placed through TechVista's website, direct sales, or authorized resellers.
+
+2. SERVICE DESCRIPTION
+TechVista Solutions provides cloud-based SaaS (Software as a Service) subscriptions. The specific service tier, features, and duration are defined in the Order Confirmation issued at the time of purchase.
+
+For Order ID: ORD-2026-005589
+Service: Annual SaaS Subscription — Pro Plan
+Duration: 12 months (03 August 2026 to 02 August 2027)
+Includes: Enterprise Cloud Access, Priority Support, Automated Testing Suite License
+
+3. PAYMENT TERMS
+3.1. Full payment is due upon order placement unless otherwise agreed in writing.
+3.2. Accepted payment methods: UPI, NEFT/RTGS, credit/debit cards.
+3.3. All amounts are quoted in Indian Rupees (INR) and are inclusive of applicable taxes unless stated otherwise.
+3.4. Late payments may result in service suspension after a 7-day grace period.
+
+4. SERVICE DELIVERY
+4.1. Upon successful payment confirmation, service access credentials shall be delivered to the Client's registered email address within 24 hours.
+4.2. TechVista shall provide a Delivery Confirmation upon successful provisioning of the service.
+4.3. The Client is responsible for verifying receipt of access credentials and notifying TechVista within 48 hours of any delivery issues.
+
+5. REFUND POLICY
+5.1. Full refund: Requests made within 7 days of order placement, provided the service has not been materially used.
+5.2. Partial refund: Pro-rata refund for unused months if requested between 8 and 30 days of order placement, subject to a 15% administrative fee.
+5.3. No refund: Requests made after 30 days of order placement, or where the service has been materially used beyond initial setup.
+5.4. Refund requests must be submitted in writing to support@techvistasolutions.in with the original Order ID.
+5.5. Refunds shall be processed within 10-15 business days to the original payment method.
+
+6. SERVICE LEVEL COMMITMENTS
+6.1. TechVista guarantees 99.9% monthly uptime for the Pro Plan tier.
+6.2. Scheduled maintenance windows shall be communicated at least 48 hours in advance.
+6.3. Support response times: Priority support requests shall receive a response within 4 business hours.
+
+7. INTELLECTUAL PROPERTY
+7.1. All software, code, and documentation remain the exclusive property of TechVista Solutions.
+7.2. The Client is granted a non-exclusive, non-transferable license to use the service for the duration of the subscription.
+
+8. LIMITATION OF LIABILITY
+8.1. TechVista's total liability shall not exceed the amount paid by the Client for the service in the 12 months preceding the claim.
+8.2. TechVista shall not be liable for indirect, incidental, or consequential damages.
+
+9. TERMINATION
+9.1. Either party may terminate this agreement with 30 days' written notice.
+9.2. TechVista may terminate immediately if the Client breaches these terms and fails to remedy within 14 days of notice.
+
+10. GOVERNING LAW
+These terms shall be governed by the laws of India. Any disputes shall be subject to the exclusive jurisdiction of the courts in Bangalore, Karnataka.
+
+For TechVista Solutions Pvt. Ltd.
+Authorized Signatory
+Date: 01 January 2026
