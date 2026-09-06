@@ -7,8 +7,9 @@ sse-starlette>=1.4.0,<1.5.0
 requests>=2.31.0
 httpx>=0.25.0
 
-# AI provider (Gemini — free tier)
+# AI providers (Gemini primary, Groq automatic failover for copilot chat)
 google-genai>=1.0.0
+groq>=0.9.0
 
 # ML stack (Phase 1)
 scikit-learn

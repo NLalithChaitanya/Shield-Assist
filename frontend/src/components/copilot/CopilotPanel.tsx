@@ -12,6 +12,8 @@
 
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { Send, Loader2, ChevronDown, ChevronRight, MessageCircle, Search, Lightbulb, FileText } from 'lucide-react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { streamCopilot, type CopilotAbility, type CopilotError } from '../../lib/api';
 import type { DisputeDetail } from '../../lib/types';
 
@@ -161,6 +163,11 @@ function matchIntent(question: string): CopilotAbility | 'off_topic' {
     'service', 'delivery', 'return', 'cancel', 'billing', 'invoice',
     'receipt', 'terms', 'conditions', 'policy', 'communication', 'chat',
     'email', 'message', 'call', 'this', 'that', 'it', // short pronouns often refer to the case
+    // Quality words that describe the case itself -- without these, a
+    // question like "what's wrong" fails the signal gate and is wrongly
+    // answered by the canned off-topic reply instead of the LLM.
+    'wrong', 'incorrect', 'inconsistent', 'invalid', 'consistency',
+    'completeness', 'quality', 'matter',
     'explain', 'investigate', 'recommend', 'draft', 'suggest',
   ];
   const hasDisputeSignal = DISPUTE_SIGNALS.some(w => lower.includes(w));
@@ -273,7 +280,14 @@ export default function CopilotPanel({ dispute }: CopilotPanelProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const streamingCleanupRef = useRef<(() => void) | null>(null);
   // Track which abilities have been shown this session to detect repeats
+  // (buttons) and which exact question wordings were already asked
+  // (typed messages), so a different question on the same topic is not
+  // answered with a canned "I just covered that" redirect.
   const shownAbilitiesRef = useRef<Set<CopilotAbility>>(new Set());
+  const askedQuestionsRef = useRef<Set<string>>(new Set());
+
+  const normalizeQuestion = (text: string): string =>
+    text.trim().toLowerCase().replace(/[!?.]+$/g, '').replace(/\s+/g, ' ');
 
   // Auto-scroll to bottom when messages change
   useEffect(() => {
@@ -315,6 +329,23 @@ export default function CopilotPanel({ dispute }: CopilotPanelProps) {
       "manually -- check the score breakdown and issues list on this page for context.",
   };
 
+  // ─── Build the conversation history sent to the backend ─────────────
+  // Only real turns are included: the merchant's typed questions plus the
+  // model's streamed answers (tagged with a 4-ability). Local, non-model
+  // messages (greeting, chitchat, off-topic, navigation, dedup redirects)
+  // are excluded so the LLM isn't fed canned text as "its own" replies.
+  const buildHistory = useCallback((): { role: 'user' | 'assistant'; text: string }[] => {
+    return messages
+      .filter(m => m.id !== 'greeting')
+      .filter(m => {
+        if (m.role === 'user') return true;
+        if (m.ability === undefined || m.ability === 'navigate') return false;
+        return !m.text.startsWith('I just covered that above');
+      })
+      .slice(-6)
+      .map(m => ({ role: m.role, text: m.text }));
+  }, [messages]);
+
   // ─── Core ability trigger (shared by typed messages AND button clicks) ───
   const triggerAbility = useCallback((ability: CopilotAbility, userText?: string) => {
     // Add user message if this was a typed message (not a button click)
@@ -339,9 +370,17 @@ export default function CopilotPanel({ dispute }: CopilotPanelProps) {
       return;
     }
 
-    // If this ability was already shown in this session, the cached
-    // response would be word-for-word identical — skip it and redirect.
-    if (shownAbilitiesRef.current.has(ability)) {
+    // Duplicate detection:
+    //  - Buttons (no typed text): running the same ability twice would
+    //    replay the word-for-word identical cached answer — skip it.
+    //  - Typed questions: only an EXACT repeat of the same wording is
+    //    suppressed; a different question on the same topic is allowed
+    //    through so the merchant gets a real (re)generated answer.
+    const normalizedQuestion = userText ? normalizeQuestion(userText) : '';
+    const isButtonRepeat = !userText && shownAbilitiesRef.current.has(ability);
+    const isExactQuestionRepeat = !!userText && askedQuestionsRef.current.has(normalizedQuestion);
+
+    if (isButtonRepeat || isExactQuestionRepeat) {
       const redirectMsg: ChatMessage = {
         id: `assistant-${Date.now()}`,
         role: 'assistant',
@@ -352,8 +391,9 @@ export default function CopilotPanel({ dispute }: CopilotPanelProps) {
       return;
     }
 
-    // First time this ability runs — mark it as shown
+    // Mark this ability / question as seen
     shownAbilitiesRef.current.add(ability);
+    if (normalizedQuestion) askedQuestionsRef.current.add(normalizedQuestion);
 
     // Stream from backend
     const assistantMsg: ChatMessage = {
@@ -415,10 +455,16 @@ export default function CopilotPanel({ dispute }: CopilotPanelProps) {
         setStreaming(false);
         streamingCleanupRef.current = null;
       },
+      {
+        // Send the merchant's actual question + prior turns so the answer
+        // is tailored to what was asked (not a fixed ability script).
+        question: userText,
+        history: buildHistory(),
+      },
     );
 
     streamingCleanupRef.current = cleanup;
-  }, [dispute.dispute_id]);
+  }, [dispute.dispute_id, buildHistory]);
 
   const sendMessage = useCallback(() => {
     const text = input.trim();
@@ -502,13 +548,21 @@ export default function CopilotPanel({ dispute }: CopilotPanelProps) {
                 className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
               >
                 <div
-                  className={`max-w-[85%] rounded-lg px-3 py-2 text-[12px] leading-relaxed whitespace-pre-wrap ${
+                  className={`max-w-[85%] rounded-lg px-3 py-2 text-[12px] leading-relaxed ${
                     msg.role === 'user'
-                      ? 'bg-signal-bg text-ink border border-signal/20'
+                      ? 'bg-signal-bg text-ink border border-signal/20 whitespace-pre-wrap'
                       : 'bg-surface-sunken text-ink'
                   }`}
                 >
-                  {msg.text}
+                  {/* Assistant replies are Markdown (Gemini/Groq) -- render it
+                      as formatted text; user messages stay plain. */}
+                  {msg.role === 'assistant' ? (
+                    <div className="chat-md">
+                      <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.text}</ReactMarkdown>
+                    </div>
+                  ) : (
+                    msg.text
+                  )}
                   {streaming && msg.role === 'assistant' && msg.id === messages[messages.length - 1]?.id && (
                     <span className="stream-cursor" />
                   )}

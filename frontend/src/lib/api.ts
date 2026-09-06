@@ -67,6 +67,16 @@ export async function approveDraft(disputeId: string): Promise<{ status: string 
   return post(`/disputes/${disputeId}/approve`);
 }
 
+// ─── Edit draft ───
+export async function updateDraft(disputeId: string, summaryText: string): Promise<{ status: string; draft: any }> {
+  return post(`/disputes/${disputeId}/draft`, { summary_text: summaryText });
+}
+
+// ─── Regenerate draft ───
+export async function regenerateDraft(disputeId: string): Promise<{ status: string; draft: any }> {
+  return post(`/disputes/${disputeId}/draft/regenerate`);
+}
+
 // ─── Submit contest ───
 export async function submitContest(disputeId: string): Promise<{ job_id: number; status: string }> {
   return post(`/disputes/${disputeId}/contest`);
@@ -81,14 +91,29 @@ export interface CopilotError {
   recoverable: boolean; // true = will resolve on its own (rate limit, circuit breaker)
 }
 
+export interface CopilotContextTurn {
+  role: 'user' | 'assistant';
+  text: string;
+}
+
 export function streamCopilot(
   disputeId: string,
   ability: CopilotAbility,
   onToken: (text: string) => void,
   onDone: () => void,
   onError: (error: CopilotError) => void,
+  context?: { question?: string; history?: CopilotContextTurn[] },
 ): () => void {
-  const eventSource = new EventSource(`${BASE}/disputes/${disputeId}/copilot/${ability}`);
+  // Chat context is passed as query params so the backend can (a) answer
+  // the merchant's ACTUAL question and (b) key its response cache on the
+  // question — otherwise two different questions on the same case would
+  // return the same canned ability answer.
+  const params = new URLSearchParams();
+  if (context?.question) params.set('q', context.question);
+  if (context?.history?.length) params.set('history', JSON.stringify(context.history));
+  const qs = params.toString();
+  const url = `${BASE}/disputes/${disputeId}/copilot/${ability}${qs ? `?${qs}` : ''}`;
+  const eventSource = new EventSource(url);
 
   const handleToken = (e: MessageEvent) => {
     try {

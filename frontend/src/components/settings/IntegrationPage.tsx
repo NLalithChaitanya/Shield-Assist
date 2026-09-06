@@ -5,7 +5,7 @@
  * and a "Test Connection" button. Never exposes credentials.
  */
 
-import { useState, useCallback } from 'react';
+import { useCallback } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Shield,
@@ -17,7 +17,6 @@ import {
   RefreshCw,
 } from 'lucide-react';
 import {
-  getRazorpayHealth,
   getRazorpayStatus,
   testRazorpayConnection,
   simulateDispute,

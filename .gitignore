@@ -52,3 +52,5 @@ _*.js
 _*.tsx
 _*.b64
 _*.json
+
+.freebuff/

@@ -34,6 +34,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from pydantic import BaseModel
 
 from sse_starlette.sse import ServerSentEvent
 from dotenv import load_dotenv
@@ -724,6 +725,107 @@ def approve_draft(dispute_id: str):
 
 
 # ===================================================================
+# PUT /disputes/{dispute_id}/draft  —  edit draft response
+# ===================================================================
+
+class UpdateDraftRequest(BaseModel):
+    summary_text: str
+
+
+@app.put("/disputes/{dispute_id}/draft")
+@app.post("/disputes/{dispute_id}/draft")
+def update_draft(dispute_id: str, payload: UpdateDraftRequest):
+    """Edit the draft response text for a dispute."""
+    dispute = repo.get(dispute_id)
+    if dispute is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Dispute {dispute_id!r} not found.",
+        )
+
+    summary_text = payload.summary_text.strip()
+    if not summary_text:
+        raise HTTPException(
+            status_code=400,
+            detail="Draft summary text cannot be empty.",
+        )
+
+    repo.update_draft_summary(dispute_id, summary_text)
+
+    repo.write_audit({
+        "dispute_id": dispute_id,
+        "stage": "draft.edited",
+        "detail": {"length": len(summary_text)},
+        "success": True,
+    })
+
+    _broadcast_sse("draft.updated", {
+        "dispute_id": dispute_id,
+    })
+
+    logger.info("Updated draft response for dispute %s", dispute_id)
+
+    latest_draft = repo.get_latest_draft(dispute_id)
+    return {
+        "dispute_id": dispute_id,
+        "status": "updated",
+        "draft": latest_draft,
+    }
+
+
+# ===================================================================
+# POST /disputes/{dispute_id}/draft/regenerate  —  regenerate draft
+# ===================================================================
+
+@app.post("/disputes/{dispute_id}/draft/regenerate")
+def regenerate_draft(dispute_id: str):
+    """Regenerate a fresh dispute response draft via the copilot."""
+    dispute = repo.get(dispute_id)
+    if dispute is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Dispute {dispute_id!r} not found.",
+        )
+
+    case_data = _build_case_data(dispute_id)
+
+    from backend.jobs.draft_job import _call_copilot_draft
+    draft_output = _call_copilot_draft(case_data)
+    citations = draft_output.get("citations", [])
+
+    now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    repo.insert_draft({
+        "dispute_id": dispute_id,
+        "summary_text": draft_output["summary_text"],
+        "citations": citations,
+        "approved": False,
+        "generated_at": now_iso,
+    })
+
+    repo.write_audit({
+        "dispute_id": dispute_id,
+        "stage": "draft.regenerated",
+        "detail": {
+            "citation_count": len(citations),
+        },
+        "success": True,
+    })
+
+    _broadcast_sse("draft.updated", {
+        "dispute_id": dispute_id,
+    })
+
+    logger.info("Regenerated draft response for dispute %s", dispute_id)
+
+    latest_draft = repo.get_latest_draft(dispute_id)
+    return {
+        "dispute_id": dispute_id,
+        "status": "regenerated",
+        "draft": latest_draft,
+    }
+
+
+# ===================================================================
 # POST /disputes/{dispute_id}/contest  —  submit contest
 # ===================================================================
 
@@ -777,27 +879,27 @@ def submit_contest(dispute_id: str):
 # ===================================================================
 
 @app.get("/disputes/{dispute_id}/copilot/explain")
-def copilot_explain(dispute_id: str):
+def copilot_explain(dispute_id: str, request: Request):
     """Stream a plain-language explanation via SSE."""
-    return _stream_copilot(dispute_id, "explain")
+    return _stream_copilot(dispute_id, "explain", request)
 
 
 @app.get("/disputes/{dispute_id}/copilot/investigate")
-def copilot_investigate(dispute_id: str):
+def copilot_investigate(dispute_id: str, request: Request):
     """Stream investigation steps via SSE."""
-    return _stream_copilot(dispute_id, "investigate")
+    return _stream_copilot(dispute_id, "investigate", request)
 
 
 @app.get("/disputes/{dispute_id}/copilot/recommend")
-def copilot_recommend(dispute_id: str):
+def copilot_recommend(dispute_id: str, request: Request):
     """Stream a strategy recommendation via SSE."""
-    return _stream_copilot(dispute_id, "recommend")
+    return _stream_copilot(dispute_id, "recommend", request)
 
 
 @app.get("/disputes/{dispute_id}/copilot/draft")
-def copilot_draft(dispute_id: str):
+def copilot_draft(dispute_id: str, request: Request):
     """Stream a dispute response draft via SSE."""
-    return _stream_copilot(dispute_id, "draft")
+    return _stream_copilot(dispute_id, "draft", request)
 
 
 def _build_case_data(dispute_id: str) -> dict:
@@ -856,13 +958,21 @@ _STREAM_FUNCTIONS = {
 }
 
 
-def _stream_copilot(dispute_id: str, ability: str):
+def _stream_copilot(dispute_id: str, ability: str, request: Request | None = None):
     """Stream copilot response as SSE events, with state-hash caching.
 
-    Before calling Gemini, checks copilot_cache for a response that
-    matches the current case state (scores, facts, gate conditions).
-    Cache hit: replays cached text as SSE token chunks (no Gemini call).
-    Cache miss: streams from Gemini, accumulates full text, stores in cache.
+    Before calling the LLM, checks copilot_cache for a response that
+    matches the current case state (scores, facts, gate conditions) AND
+    the merchant's question/history (if any).
+    Cache hit: replays cached text as SSE token chunks (no LLM call).
+    Cache miss: streams from the LLM, accumulates full text, stores in cache.
+
+    Optional query params (chat mode -- used by the frontend CopilotPanel):
+      q=...        -- the merchant's literal question (URL-encoded)
+      history=...  -- JSON array of {"role": "user"|"assistant", "text": ...}
+                      of recent turns, so answers can reference the
+                      conversation. Without these, the ability answers
+                      its fixed prompt (legacy behavior preserved).
 
     SSE events sent:
       - copilot.token:  {text: "..."}  -- each text chunk
@@ -872,7 +982,7 @@ def _stream_copilot(dispute_id: str, ability: str):
     import asyncio
     from backend.copilot import (
         explain_stream, investigate_stream, recommend_stream, draft_stream,
-        compute_state_hash,
+        compute_state_hash, _GEMINI_UNAVAILABLE_FALLBACK,
     )
 
     stream_fn_name = _STREAM_FUNCTIONS.get(ability)
@@ -880,6 +990,28 @@ def _stream_copilot(dispute_id: str, ability: str):
         raise HTTPException(status_code=400, detail=f"Unknown ability: {ability}")
 
     case_data = _build_case_data(dispute_id)
+
+    # --- Chat context: the merchant's question + recent conversation ---
+    question = ""
+    history: list[dict] = []
+    if request is not None:
+        question = (request.query_params.get("q") or "").strip()[:500]
+        raw_history = request.query_params.get("history") or ""
+        if raw_history:
+            try:
+                parsed = json.loads(raw_history)
+            except json.JSONDecodeError:
+                parsed = None
+            if isinstance(parsed, list):
+                for m in parsed[-6:]:
+                    if not isinstance(m, dict):
+                        continue
+                    role = str(m.get("role") or "")
+                    text = str(m.get("text") or "")[:500]
+                    if role in ("user", "assistant") and text:
+                        history.append({"role": role, "text": text})
+    case_data["question"] = question
+    case_data["history"] = history
     state_hash = compute_state_hash(case_data)
 
     # --- Cache lookup ---
@@ -948,9 +1080,16 @@ def _stream_copilot(dispute_id: str, ability: str):
                 full_text.append(chunk)
                 yield f"event: copilot.token\ndata: {json.dumps({'text': chunk})}\n\n"
 
-            # Store complete response in cache
+            # Store complete response in cache -- EXCEPT the honest
+            # "both AI providers unavailable" fallback, which must never
+            # be cached as a real answer (otherwise a stale unavailable
+            # reply would replay after the provider recovers).
             complete_text = "".join(full_text)
-            if complete_text.strip():
+            complete_text_stripped = complete_text.strip()
+            is_provider_fallback = (
+                complete_text_stripped == _GEMINI_UNAVAILABLE_FALLBACK
+            )
+            if complete_text_stripped and not is_provider_fallback:
                 repo.set_copilot_cache(
                     dispute_id, ability, state_hash, complete_text
                 )
@@ -960,11 +1099,27 @@ def _stream_copilot(dispute_id: str, ability: str):
                 )
 
             # Stream complete
+            audit_detail = {
+                "ability": ability,
+                "streamed": True,
+                "cached": False,
+                "state_hash": state_hash,
+            }
+            audit_success = True
+            if is_provider_fallback:
+                audit_detail["provider_unavailable"] = True
+                audit_success = False
             repo.write_audit({
                 "dispute_id": dispute_id,
                 "stage": f"copilot.{ability}",
-                "detail": {"ability": ability, "streamed": True, "cached": False, "state_hash": state_hash},
-                "success": True,
+                "detail": audit_detail,
+                "success": audit_success,
+                **({
+                    "error_detail": (
+                        "Both AI providers (Gemini, Groq) unavailable -- "
+                        "honest fallback message returned, no fabrication"
+                    )
+                } if is_provider_fallback else {}),
             })
 
             done_data = json.dumps({

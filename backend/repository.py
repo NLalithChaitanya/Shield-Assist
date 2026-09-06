@@ -561,6 +561,30 @@ class SQLiteRepository:
         finally:
             conn.close()
 
+    def update_draft_summary(self, dispute_id: str, summary_text: str) -> None:
+        conn = self._conn()
+        try:
+            row = conn.execute(
+                """SELECT draft_id FROM drafts WHERE dispute_id = ?
+                   ORDER BY draft_id DESC LIMIT 1""",
+                (dispute_id,),
+            ).fetchone()
+            if row:
+                conn.execute(
+                    """UPDATE drafts SET summary_text = ? WHERE draft_id = ?""",
+                    (summary_text, row["draft_id"]),
+                )
+            else:
+                conn.execute(
+                    """INSERT INTO drafts
+                       (dispute_id, summary_text, citations, approved, generated_at)
+                       VALUES (?, ?, '[]', 'false', ?)""",
+                    (dispute_id, summary_text, _now_iso()),
+                )
+            conn.commit()
+        finally:
+            conn.close()
+
     def get_latest_draft(self, dispute_id: str) -> Optional[dict]:
         conn = self._conn()
         try:

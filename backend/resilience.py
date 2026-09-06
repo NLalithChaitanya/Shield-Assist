@@ -370,6 +370,17 @@ def classify_gemini_error(exc: Exception) -> dict:
             "detail": f"Gemini quota exhausted (HTTP 403): {message}",
         }
 
+    # 3.5. Network / read / connect timeouts -- transient by nature.
+    #    These used to fall through to 'unknown' (unrecoverable), which is
+    #    why timeout storms surfaced raw errors instead of retrying/failing
+    #    over to the backup provider.
+    if _is_timeout_error(exc):
+        return {
+            "error_type": "service_unavailable",
+            "recoverable": True,
+            "detail": f"AI provider request timed out: {exc}",
+        }
+
     # 3. String-matching fallback (covers edge cases where code isn't set)
     lower_exc = str(exc).lower()
     if "429" in lower_exc or "rate limit" in lower_exc or "too many" in lower_exc:
@@ -396,6 +407,38 @@ def classify_gemini_error(exc: Exception) -> dict:
         "recoverable": False,
         "detail": str(exc),
     }
+
+
+# ---------------------------------------------------------------------------
+# Timeout detection
+# ---------------------------------------------------------------------------
+
+def _is_timeout_error(exc: Exception) -> bool:
+    """True for network/read/connect timeouts and deadline-exceeded errors.
+
+    Covers:
+      - built-in TimeoutError (incl. socket.timeout on py3.10+)
+      - httpx.TimeoutException subclasses (ReadTimeout, ConnectTimeout, ...)
+      - provider SDK messages mentioning 'timed out' / 'deadline exceeded'
+    """
+    if isinstance(exc, TimeoutError):
+        return True
+    try:
+        import httpx
+        if isinstance(exc, httpx.TimeoutException):
+            return True
+    except ImportError:
+        pass
+    message = str(exc).lower()
+    return any(
+        token in message
+        for token in (
+            "timed out",
+            "read timeout",
+            "connect timeout",
+            "deadline exceeded",
+        )
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -429,5 +472,38 @@ def wrap_gemini_client(raw_client: Any) -> ResilientClient:
             name="gemini",
         ),
         max_retries=3,
+        backoff_base=1.0,
+    )
+
+
+def wrap_groq_client(raw_client: Any) -> ResilientClient:
+    """Wrap the Groq client with resilience (backup provider for copilot).
+
+    Groq is the automatic failover provider: when Gemini fails (503,
+    timeout, quota, rate limit...), copilot chat + draft requests are
+    retried against Groq before the honest "Ally unavailable" fallback.
+
+    Defaults are conservative for Groq's free tier and configurable via
+    GROQ_RPM:
+      - Circuit breaker: 5 failures -> open -> 30s cooldown
+      - Rate limiter: 30 RPM
+      - Retry: 2 attempts with exponential backoff (1s, 2s)
+    """
+    import os
+    rpm = int(os.environ.get("GROQ_RPM", "30"))
+
+    return ResilientClient(
+        raw_client=raw_client,
+        breaker=CircuitBreaker(
+            failure_threshold=5,
+            cooldown_seconds=30.0,
+            name="groq",
+        ),
+        rate_limiter=TokenBucketRateLimiter(
+            capacity=min(rpm, 30),
+            refill_rate=rpm / 60.0,
+            name="groq",
+        ),
+        max_retries=2,
         backoff_base=1.0,
     )

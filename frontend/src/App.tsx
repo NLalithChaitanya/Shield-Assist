@@ -25,9 +25,7 @@ const queryClient = new QueryClient({
 });
 
 export default function App() {
-  const [authenticated, setAuthenticated] = useState(() => {
-    return localStorage.getItem('shield-auth') === 'true';
-  });
+  const [authenticated, setAuthenticated] = useState(false);
 
   if (!authenticated) {
     return (

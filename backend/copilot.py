@@ -2,7 +2,7 @@
 backend/copilot.py
 
 LLM copilot layer for Shield Assist -- four capabilities powered by
-Google Gemini (free tier):
+Google Gemini (free tier) with automatic Groq failover:
 
   explain()         / explain_stream()       -- dispute summary
   investigate()     / investigate_stream()   -- investigation steps
@@ -13,14 +13,24 @@ Batched functions: return the full response as a string.  Used by the
 draft.response job (which needs the complete text for citation integrity
 checking).
 
-Streaming functions: yield text chunks as Gemini generates them.  Used
+Streaming functions: yield text chunks as the LLM generates them.  Used
 by the SSE copilot routes for real-time display in the frontend.
+
+Provider layout (all failover is inside _call_gemini/_call_gemini_stream):
+  1. Gemini (primary) -- resilience wrapper retries + copilot 503 retries.
+  2. On ANY Gemini failure: Groq (backup, GROQ_API_KEY/GROQ_MODEL).
+  3. Both down: honest "Ally temporarily unavailable" fallback text for
+     streams (never a raw error, never fabricated evidence); a raised
+     error for batched calls so the draft job's grounded template
+     fallback applies.
+  Gemini OCR for document extraction (document.process) does NOT route
+  through Groq -- it stays Gemini-only.
 
 All functions receive ONLY structured facts -- never raw documents.
 This is "Evidence Integrity Mode": the copilot can only reference facts
 that have been extracted and stored, not hallucinate from raw images.
 
-AI provider: Google Gemini (free tier, gemini-3.5-flash-lite).
+AI providers: Google Gemini (primary) + Groq (automatic failover).
 """
 
 from __future__ import annotations
@@ -54,6 +64,10 @@ def compute_state_hash(case_data: dict) -> str:
         "gate_action": case_data.get("gate", {}).get("action"),
         "failing_conditions": case_data.get("gate", {}).get("failing_conditions", []),
         "facts": case_data.get("facts", []),
+        # Chat context: a different question asked against the same case
+        # state must produce a different response, not a cached replay.
+        "question": case_data.get("question", ""),
+        "history": case_data.get("history", []),
     }
     raw = json.dumps(key, sort_keys=True, default=str).encode()
     return hashlib.sha256(raw).hexdigest()[:16]
@@ -85,19 +99,22 @@ class DraftOutput:
 
 
 # ---------------------------------------------------------------------------
-# Gemini API client
+# AI provider clients (Gemini primary + Groq automatic failover)
 # ---------------------------------------------------------------------------
 
 _resilient_client = None
 _model_name = None
+_groq_client = None
+_groq_model_name = None
+
 
 def _get_gemini_client():
     """Get a resilience-wrapped Gemini client via the google-genai SDK.
 
     Returns (ResilientClient, model_name).  The ResilientClient wraps
     the raw genai.Client with circuit breaker (5 failures -> open -> 30s)
-    + rate limiter (14 RPM) + retry (1 backoff attempt).  This is the
-    ONLY place a Gemini client is created.
+    + rate limiter (14 RPM) + retry with backoff.  This is the ONLY
+    place a Gemini client is created.
 
     On the happy path this is a transparent passthrough -- rate limiter
     always has tokens, circuit breaker is closed, no retries needed.
@@ -126,45 +143,106 @@ def _get_gemini_client():
     return _resilient_client, _model_name
 
 
+def _get_groq_client():
+    """Get a resilience-wrapped Groq client (automatic failover provider).
+
+    Returns (ResilientClient | None, model_name | None).  Returns
+    (None, None) when GROQ_API_KEY is not set (or the groq package is
+    not installed) so the system degrades gracefully to Gemini-only
+    behavior -- the original code path is preserved exactly.
+
+    Groq is the BACKUP provider only: copilot chat + draft requests fail
+    over here when Gemini errors (503 / timeout / quota / rate limit).
+    Gemini OCR for document extraction is NOT routed here.
+    """
+    global _groq_client, _groq_model_name
+
+    if _groq_client is not None:
+        return _groq_client, _groq_model_name
+
+    from dotenv import load_dotenv
+    load_dotenv()
+
+    api_key = os.environ.get("GROQ_API_KEY", "").strip()
+    _groq_model_name = (
+        os.environ.get("GROQ_MODEL", "").strip() or "llama-3.3-70b-versatile"
+    )
+
+    if not api_key:
+        logger.debug("GROQ_API_KEY not set -- Groq failover disabled")
+        return None, None
+
+    try:
+        from groq import Groq  # noqa: F401
+    except ImportError:
+        logger.error(
+            "GROQ_API_KEY is set but the 'groq' package is not installed. "
+            "Run: pip install groq -- Groq failover disabled"
+        )
+        return None, None
+
+    from backend.resilience import wrap_groq_client
+    # max_retries=0: the ResilientClient wrapper owns retry/backoff, so the
+    # raw SDK must not double-retry underneath it.
+    raw_client = Groq(api_key=api_key, timeout=60.0, max_retries=0)
+    _groq_client = wrap_groq_client(raw_client)
+    logger.info("Groq failover client initialized (model=%s)", _groq_model_name)
+    return _groq_client, _groq_model_name
+
+
 # ---------------------------------------------------------------------------
-# Gemini call helpers
+# AI call helpers (Gemini primary, Groq failover, honest fallback)
 # ---------------------------------------------------------------------------
 
-# Fallback messages for when Gemini is temporarily unavailable.
-# These never fabricate evidence -- they tell the user what happened
-# and ask them to retry.
+# Fallback message used when BOTH providers are unavailable.  It never
+# fabricates evidence -- it tells the user what happened and asks them
+# to retry.  app.py refuses to cache this text as a real answer.
 _GEMINI_UNAVAILABLE_FALLBACK = (
     "Ally is temporarily unavailable because the AI service is experiencing "
     "high demand.  Your evidence analysis is still available.  "
     "Please retry in a few seconds."
 )
 
-# Maximum copilot-level retries for transient 503 errors (on top of
-# the resilience wrapper's own retries).  Total Gemini calls per
-# request = (1 + resilience_max_retries) * (1 + copilot_retries).
-# With defaults: (1+3) * (1+1) = 8 max calls.
+# Maximum copilot-level retries for transient 503 errors on the PRIMARY
+# provider (on top of the resilience wrapper's own retries).  After
+# these are exhausted the request fails over to Groq.
 _COPILOT_MAX_RETRIES = 1
 
 
+class _GroqNotConfiguredError(RuntimeError):
+    """Raised when Groq failover is attempted but GROQ_API_KEY is unset."""
+
+
 def _is_transient_503(exc: Exception) -> bool:
-    """Check if an exception is a transient Gemini 503 error."""
+    """Check if an exception is a transient 503 / service-unavailable error."""
     from backend.resilience import classify_gemini_error
     info = classify_gemini_error(exc)
     return info["error_type"] == "service_unavailable" and info["recoverable"]
 
 
-def _call_gemini(system_prompt: str, user_prompt: str, max_tokens: int = 2048) -> str:
-    """Call Gemini and return the full response text (batched).
+def _is_recoverable_failure(exc: Exception) -> bool:
+    """True when an AI-provider error will resolve on its own.
+
+    Covers service unavailable (503), timeouts, rate limits (429), and
+    circuit-breaker trips -- but NOT quota exhaustion / auth errors.
+    Used to decide between yielding the honest fallback message vs
+    re-raising so the SSE layer reports the specific error type.
+    """
+    from backend.resilience import classify_gemini_error
+    return classify_gemini_error(exc)["recoverable"]
+
+
+def _call_gemini_primary_batch(
+    system_prompt: str, user_prompt: str, max_tokens: int = 2048
+) -> str:
+    """Call Gemini and return the full response text (batched, NO failover).
 
     Goes through ResilientClient.call() -- circuit breaker, rate limiter,
-    and retry are all active.  On the happy path this is transparent.
-
-    Raises on failure -- batched callers (draft job) rely on job-level
-    retry rather than copilot-level fallback, because returning a
-    fallback text as a "real draft" would be wrong.
+    and retry are all active.  Raises on failure; the caller (_call_gemini)
+    decides whether to fail over to Groq.
     """
     client, model_name = _get_gemini_client()
-    logger.debug("Gemini batch: model=%s", model_name)
+    logger.debug("Gemini batch (primary): model=%s", model_name)
 
     response = client.call(
         "models.generate_content",
@@ -178,21 +256,20 @@ def _call_gemini(system_prompt: str, user_prompt: str, max_tokens: int = 2048) -
     return response.text or ""
 
 
-def _call_gemini_stream(system_prompt: str, user_prompt: str, max_tokens: int = 2048):
-    """Stream Gemini response as text chunks.
+def _call_gemini_primary_stream(
+    system_prompt: str, user_prompt: str, max_tokens: int = 2048
+):
+    """Stream from Gemini (primary, NO failover).
 
-    Goes through ResilientClient.call() for circuit breaker + rate limiter.
-    The generator is fully consumed inside the call so the resilience
-    wrapper can record success/failure before yielding chunks to callers.
-
-    If all retries fail with a transient 503, yields a clean fallback
-    message instead of raising -- the browser never sees raw errors.
+    Retries transient 503s with backoff (_COPILOT_MAX_RETRIES).  Any
+    final failure -- transient-exhausted or not -- raises so the caller
+    (_call_gemini_stream) can fail over to Groq or yield the honest
+    fallback message.
     """
     import time
     client, model_name = _get_gemini_client()
-    logger.debug("Gemini stream: model=%s", model_name)
+    logger.debug("Gemini stream (primary): model=%s", model_name)
 
-    last_exc = None
     for copilot_attempt in range(1 + _COPILOT_MAX_RETRIES):
         try:
             stream = client.call(
@@ -209,7 +286,6 @@ def _call_gemini_stream(system_prompt: str, user_prompt: str, max_tokens: int = 
                     yield chunk.text
             return  # Success -- done
         except Exception as exc:
-            last_exc = exc
             if _is_transient_503(exc) and copilot_attempt < _COPILOT_MAX_RETRIES:
                 # Transient 503: retry with backoff
                 delay = 2 ** (copilot_attempt + 1)  # 2s, 4s
@@ -218,16 +294,279 @@ def _call_gemini_stream(system_prompt: str, user_prompt: str, max_tokens: int = 
                     copilot_attempt + 1, 1 + _COPILOT_MAX_RETRIES, delay, exc,
                 )
                 time.sleep(delay)
-            elif _is_transient_503(exc):
-                # Transient 503 but all copilot retries exhausted -- fallback
+            else:
+                # Exhausted transient retries OR non-transient error
+                # (quota, auth, timeout, unknown) -- let the failover
+                # wrapper decide what to do next.
+                raise
+
+
+# ---------------------------------------------------------------------------
+# Groq call helpers (failover provider -- OpenAI-compatible chat API)
+# ---------------------------------------------------------------------------
+
+def _groq_messages(system_prompt: str, user_prompt: str) -> list[dict]:
+    """Translate copilot prompts into Groq's chat message format.
+
+    The system/user prompt text is IDENTICAL to what Gemini receives,
+    so grounding behavior and citation rules do not change per provider.
+    """
+    return [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt},
+    ]
+
+
+def _call_groq_batch(
+    system_prompt: str, user_prompt: str, max_tokens: int = 2048
+) -> str:
+    """Call Groq and return the full response text (batched).
+
+    Runs through ResilientClient (circuit breaker + rate limiter +
+    retry).  Raises on failure -- callers fall through to the honest
+    unavailable message / job-level template.
+    """
+    client, model_name = _get_groq_client()
+    if client is None:
+        raise _GroqNotConfiguredError(
+            "GROQ_API_KEY not set -- cannot use Groq failover"
+        )
+    logger.debug("Groq batch (failover): model=%s", model_name)
+
+    response = client.call(
+        "chat.completions.create",
+        model=model_name,
+        messages=_groq_messages(system_prompt, user_prompt),
+        max_tokens=max_tokens,
+        temperature=0.7,
+    )
+    choices = getattr(response, "choices", None) or []
+    if not choices:
+        return ""
+    return getattr(getattr(choices[0], "message", None), "content", None) or ""
+
+
+def _call_groq_stream(
+    system_prompt: str, user_prompt: str, max_tokens: int = 2048
+):
+    """Stream from Groq as text chunks (failover provider)."""
+    client, model_name = _get_groq_client()
+    if client is None:
+        raise _GroqNotConfiguredError(
+            "GROQ_API_KEY not set -- cannot use Groq failover"
+        )
+    logger.debug("Groq stream (failover): model=%s", model_name)
+
+    stream = client.call(
+        "chat.completions.create",
+        model=model_name,
+        messages=_groq_messages(system_prompt, user_prompt),
+        max_tokens=max_tokens,
+        temperature=0.7,
+        stream=True,
+    )
+    for chunk in stream:
+        choices = getattr(chunk, "choices", None) or []
+        if not choices:
+            continue
+        delta = getattr(choices[0], "delta", None)
+        content = getattr(delta, "content", None)
+        if content:
+            yield content
+
+
+# ---------------------------------------------------------------------------
+# Conversation context (question + recent turns) for chat answers
+# ---------------------------------------------------------------------------
+# Root cause of "Ally feels static": the merchant's actual question and
+# earlier turns were never sent to the model -- each ability answered a
+# fixed pre-written prompt.  These helpers attach the live question and
+# the recent conversation to the user prompt so answers are tailored to
+# what was just asked, while keeping every claim grounded in the
+# extracted facts that are already in the prompt.
+
+_MAX_CONTEXT_MESSAGES = 6
+_MAX_CONTEXT_CHARS = 500
+
+
+def _conversation_block(case_data: dict) -> str:
+    """Build a 'merchant asked + recent conversation' block, or '' if none."""
+    question = str(case_data.get("question") or "").strip()[:_MAX_CONTEXT_CHARS]
+    history = case_data.get("history") or []
+    if not question and not history:
+        return ""
+
+    parts: list[str] = []
+    if history:
+        lines = []
+        for m in history[-_MAX_CONTEXT_MESSAGES:]:
+            role = m.get("role") if isinstance(m, dict) else ""
+            text = str(m.get("text") or "")[: _MAX_CONTEXT_CHARS]
+            if role in ("user", "assistant") and text:
+                who = "Merchant" if role == "user" else "Ally"
+                lines.append(f"{who}: {text}")
+        if lines:
+            parts.append(
+                "Recent conversation (oldest first):\n" + "\n".join(lines)
+            )
+
+    if question:
+        parts.append(f"The merchant's latest question is:\n{question}")
+
+    if question:
+        parts.append(
+            "Answer THAT question directly. It may go beyond the task described "
+            "above -- that is fine. Hard rule: every factual claim must stay "
+            "grounded in the extracted facts and case data provided; never "
+            "invent facts, amounts, dates, document IDs, or citations. If the "
+            "question asks something the case data cannot answer, say so plainly."
+        )
+    else:
+        parts.append(
+            "Use the conversation above for context about this case while "
+            "carrying out your task. Hard rule: every factual claim must stay "
+            "grounded in the extracted facts and case data provided; never "
+            "invent facts, amounts, dates, document IDs, or citations."
+        )
+    return "\n\n---\n\n" + "\n\n".join(parts)
+
+
+def _append_conversation(user_prompt: str, case_data: dict | None) -> str:
+    """Append the question/history block to a user prompt when present."""
+    if not case_data:
+        return user_prompt
+    block = _conversation_block(case_data)
+    if not block:
+        return user_prompt
+    return user_prompt.rstrip() + block
+
+
+# ---------------------------------------------------------------------------
+# Failover wrappers (public call surface -- Gemini first, Groq second)
+# ---------------------------------------------------------------------------
+
+def _call_gemini(
+    system_prompt: str,
+    user_prompt: str,
+    max_tokens: int = 2048,
+    case_data: dict | None = None,
+) -> str:
+    """Call the LLM and return the full response text (batched, failover).
+
+    Order:
+      1. Gemini (primary) with resilience retries.
+      2. On ANY Gemini failure: Groq failover.
+      3. If Groq is not configured: re-raise the original Gemini error
+         (preserves pre-failover behavior for batched callers).
+      4. If both providers fail: raise the Groq error -- the draft
+         job applies its grounded template fallback from there, and
+         returning fabricated/fallback text as a "real draft" would be
+         wrong.
+
+    When case_data contains the merchant's live 'question' / 'history',
+    that context is appended to the user prompt so the answer addresses
+    what was actually asked (chat mode).
+    """
+    user_prompt = _append_conversation(user_prompt, case_data)
+    try:
+        return _call_gemini_primary_batch(system_prompt, user_prompt, max_tokens)
+    except Exception as exc:
+        client, _model = _get_groq_client()
+        if client is None:
+            logger.error(
+                "Gemini batch failed (%s) and Groq failover is not "
+                "configured -- raising", exc,
+            )
+            raise
+        logger.warning(
+            "Gemini batch failed (%s) -- failing over to Groq", exc,
+        )
+        try:
+            return _call_groq_batch(system_prompt, user_prompt, max_tokens)
+        except Exception as groq_exc:
+            logger.error(
+                "Gemini AND Groq both failed. Gemini: %s -- Groq: %s",
+                exc, groq_exc,
+            )
+            raise groq_exc from exc
+
+
+def _call_gemini_stream(
+    system_prompt: str,
+    user_prompt: str,
+    max_tokens: int = 2048,
+    case_data: dict | None = None,
+):
+    """Stream a copilot response as text chunks (failover).
+
+    Order:
+      1. Gemini (primary) -- resilience retries + _COPILOT_MAX_RETRIES.
+      2. If Gemini fails BEFORE any text was streamed: retry on Groq.
+      3. If both fail: yield the honest _GEMINI_UNAVAILABLE_FALLBACK
+         message (never a raw error, never fabricated evidence).
+      4. If Gemini dies MID-STREAM after partial text: re-raise so the
+         SSE layer emits an error event (no concatenated two-provider
+         reply).
+
+    When case_data contains the merchant's live 'question' / 'history',
+    that context is appended to the user prompt (chat mode).
+    """
+    user_prompt = _append_conversation(user_prompt, case_data)
+    yielded_any = False
+    try:
+        for chunk in _call_gemini_primary_stream(
+            system_prompt, user_prompt, max_tokens
+        ):
+            yielded_any = True
+            yield chunk
+        return  # Gemini succeeded
+    except Exception as primary_exc:
+        if yielded_any:
+            # Gemini streamed partial text then failed mid-stream -- do NOT
+            # concatenate a second provider's reply onto the partial one.
+            logger.error(
+                "Gemini stream interrupted after partial text: %s", primary_exc,
+            )
+            raise
+
+        recoverable = _is_recoverable_failure(primary_exc)
+        client, _model = _get_groq_client()
+        if client is None:
+            # No backup provider configured.
+            if recoverable:
+                # Transient (503 / timeout / rate limit / circuit breaker):
+                # yield the honest fallback -- the browser never sees a raw
+                # provider error (pre-existing behavior, preserved).
                 logger.error(
-                    "Gemini stream 503 after all retries: %s -- yielding fallback", exc,
+                    "Gemini unavailable (%s) and Groq failover is not "
+                    "configured -- yielding honest fallback", primary_exc,
                 )
                 yield _GEMINI_UNAVAILABLE_FALLBACK
                 return
+            # Non-transient (quota, auth): re-raise so the SSE layer can
+            # classify and send the ability-specific copilot.error event.
+            logger.error(
+                "Gemini non-transient failure (%s) and Groq failover is not "
+                "configured -- raising", primary_exc,
+            )
+            raise
+
+        logger.warning(
+            "Gemini stream failed (%s) -- failing over to Groq", primary_exc,
+        )
+        try:
+            for chunk in _call_groq_stream(system_prompt, user_prompt, max_tokens):
+                yield chunk
+        except Exception as groq_exc:
+            logger.error(
+                "Gemini AND Groq both failed. Gemini: %s -- Groq: %s",
+                primary_exc, groq_exc,
+            )
+            if recoverable:
+                yield _GEMINI_UNAVAILABLE_FALLBACK
             else:
-                # Non-transient error (quota, auth, etc.) -- let it propagate
-                # so the SSE handler can classify and send copilot.error event
+                # Original error was non-transient (e.g. quota) -- surface
+                # it so the frontend shows the specific, honest state.
                 raise
 
 
@@ -393,7 +732,7 @@ def explain(case_data: dict) -> str:
     """Plain-language explanation of the dispute (batched)."""
     system, user = _build_explain_prompt(case_data)
     try:
-        return _call_gemini(system, user)
+        return _call_gemini(system, user, case_data=case_data)
     except Exception as exc:
         logger.error("copilot.explain failed: %s", exc)
         raise
@@ -403,7 +742,7 @@ def investigate(case_data: dict) -> str:
     """Recommended investigation steps (batched)."""
     system, user = _build_investigate_prompt(case_data)
     try:
-        return _call_gemini(system, user)
+        return _call_gemini(system, user, case_data=case_data)
     except Exception as exc:
         logger.error("copilot.investigate failed: %s", exc)
         raise
@@ -413,7 +752,7 @@ def recommend(case_data: dict) -> str:
     """Strategy recommendation (batched)."""
     system, user = _build_recommend_prompt(case_data)
     try:
-        return _call_gemini(system, user)
+        return _call_gemini(system, user, case_data=case_data)
     except Exception as exc:
         logger.error("copilot.recommend failed: %s", exc)
         raise
@@ -430,7 +769,7 @@ def explain_stream(case_data: dict) -> Generator[str, None, None]:
     """
     system, user = _build_explain_prompt(case_data)
     try:
-        yield from _call_gemini_stream(system, user)
+        yield from _call_gemini_stream(system, user, case_data=case_data)
     except Exception as exc:
         logger.error("copilot.explain_stream failed: %s", exc)
         raise
@@ -440,7 +779,7 @@ def investigate_stream(case_data: dict) -> Generator[str, None, None]:
     """Stream recommended investigation steps."""
     system, user = _build_investigate_prompt(case_data)
     try:
-        yield from _call_gemini_stream(system, user)
+        yield from _call_gemini_stream(system, user, case_data=case_data)
     except Exception as exc:
         logger.error("copilot.investigate_stream failed: %s", exc)
         raise
@@ -450,7 +789,7 @@ def recommend_stream(case_data: dict) -> Generator[str, None, None]:
     """Stream a strategy recommendation."""
     system, user = _build_recommend_prompt(case_data)
     try:
-        yield from _call_gemini_stream(system, user)
+        yield from _call_gemini_stream(system, user, case_data=case_data)
     except Exception as exc:
         logger.error("copilot.recommend_stream failed: %s", exc)
         raise
@@ -550,11 +889,15 @@ def draft_stream(case_data: dict) -> Generator[str, None, None]:
     )
 
     try:
-        yield from _call_gemini_stream(system, user)
+        yield from _call_gemini_stream(system, user, case_data=case_data)
     except Exception as exc:
         logger.error("copilot.draft_stream failed: %s", exc)
         raise
 
+
+# ---------------------------------------------------------------------------
+# Draft output parser
+# ---------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------
 # Draft output parser
@@ -570,10 +913,15 @@ def _parse_draft_output(raw: str, facts: list[dict]) -> tuple[str, list[Citation
     Logs warnings for citations referencing non-existent fact_ids.
     """
     import json as _json
+    import re
 
-    # Try to extract JSON from the response (may have markdown fences)
     text = raw.strip()
-    if text.startswith("```"):
+
+    # Try to extract JSON from markdown fences or regex match for outer {...}
+    fence_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
+    if fence_match:
+        text = fence_match.group(1).strip()
+    elif text.startswith("```"):
         parts = text.split("\n", 1)
         text = parts[1] if len(parts) > 1 else text
         if text.endswith("```"):
@@ -583,19 +931,39 @@ def _parse_draft_output(raw: str, facts: list[dict]) -> tuple[str, list[Citation
     try:
         parsed = _json.loads(text)
     except (_json.JSONDecodeError, ValueError):
-        pass
+        json_obj_match = re.search(r"(\{.*\})", text, re.DOTALL)
+        if json_obj_match:
+            try:
+                parsed = _json.loads(json_obj_match.group(1))
+            except (_json.JSONDecodeError, ValueError):
+                pass
 
-    if parsed and isinstance(parsed, dict) and "response_text" in parsed:
-        response_text = parsed["response_text"]
+    response_text = ""
+    raw_citations = []
+
+    if isinstance(parsed, dict):
+        response_text = parsed.get("response_text") or parsed.get("summary_text") or parsed.get("text") or ""
         raw_citations = parsed.get("citations", [])
-    else:
-        # Fallback: treat entire response as the text, build mechanical citations
+
+    # If response_text is empty or still contains an unparsed raw JSON string wrapper
+    if not response_text:
         response_text = raw
-        raw_citations = []
-        logger.warning(
-            "Gemini draft output was not valid JSON -- using raw text, "
-            "building mechanical citations from fact list"
-        )
+
+    # Extra safety check: if response_text is a JSON string containing "response_text":
+    if response_text.strip().startswith("{") and "response_text" in response_text:
+        try:
+            inner_parsed = _json.loads(response_text)
+            if isinstance(inner_parsed, dict) and "response_text" in inner_parsed:
+                response_text = inner_parsed["response_text"]
+                if not raw_citations and "citations" in inner_parsed:
+                    raw_citations = inner_parsed.get("citations", [])
+        except Exception:
+            resp_match = re.search(r'"response_text"\s*:\s*"((?:[^"\\]|\\.)*)"', response_text)
+            if resp_match:
+                response_text = resp_match.group(1).encode('utf-8').decode('unicode_escape')
+
+    if not response_text:
+        response_text = raw
 
     # Build valid citation objects, filtering out non-existent fact_ids
     valid_fact_ids = {f["fact_id"]: f for f in facts}
@@ -748,7 +1116,7 @@ def draft(case_data: dict) -> DraftOutput:
     )
 
     try:
-        raw = _call_gemini(system, user, max_tokens=4096)
+        raw = _call_gemini(system, user, max_tokens=4096, case_data=case_data)
     except Exception as exc:
         logger.error("copilot.draft failed: %s", exc)
         raise

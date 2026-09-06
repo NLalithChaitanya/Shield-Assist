@@ -312,9 +312,44 @@ class TestClassifyGeminiError:
         assert result["error_type"] == "service_unavailable"
         assert result["recoverable"] is True
 
+    def test_timeout_error_recoverable(self):
+        """Built-in TimeoutError → service_unavailable, recoverable."""
+        result = classify_gemini_error(TimeoutError("Operation timed out"))
+        assert result["error_type"] == "service_unavailable"
+        assert result["recoverable"] is True
+
+    def test_timeout_message_recoverable(self):
+        """Message mentioning a read timeout → recoverable (no code attr)."""
+        exc = Exception("httpx.ReadTimeout: read timed out after 30s")
+        result = classify_gemini_error(exc)
+        assert result["error_type"] == "service_unavailable"
+        assert result["recoverable"] is True
+
+    def test_httpx_timeout_subclass_recoverable(self):
+        """httpx.TimeoutException subclass → recoverable."""
+        httpx = pytest.importorskip("httpx")
+
+        class FakeReadTimeout(httpx.TimeoutException):
+            pass
+
+        result = classify_gemini_error(FakeReadTimeout("read timed out"))
+        assert result["error_type"] == "service_unavailable"
+        assert result["recoverable"] is True
+
 
 class TestCopilot503Retry:
     """Test copilot-level retry and fallback for Gemini 503 errors."""
+
+    @pytest.fixture(autouse=True)
+    def _disable_groq_failover(self, monkeypatch):
+        """Keep these pre-existing Gemini tests offline and deterministic.
+
+        The new Groq failover path must not attempt real network calls
+        here, so it is stubbed as disabled (None, None) -- which restores
+        the exact behavior these tests were written against.
+        """
+        import backend.copilot as copilot
+        monkeypatch.setattr(copilot, "_get_groq_client", lambda: (None, None))
 
     def test_streaming_succeeds_immediately(self):
         """Normal Gemini success → full response, no fallback."""
