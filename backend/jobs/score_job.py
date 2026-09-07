@@ -64,26 +64,37 @@ def _ensure_classifier_loaded() -> None:
     Prefers the calibrated model (isotonic regression wrapper) if
     available, falling back to the uncalibrated base classifier.
     Both expose the same predict_proba() interface.
+
+    On failure, logs the error and leaves _clf=None so the next call
+    retries (instead of permanently disabling the classifier).
     """
     global _clf, _clf_features, _clf_loaded
     if _clf_loaded:
         return
-    _clf_loaded = True
 
     # Prefer calibrated model (better probability estimates)
     if CALIBRATED_MODEL_PATH.exists():
-        with open(CALIBRATED_MODEL_PATH, "rb") as f:
-            artifact = pickle.load(f)
-        _clf = artifact["model"]
-        _clf_features = artifact["feature_columns"]
-        method = artifact.get("method", "unknown")
-        logger.info(
-            "Loaded CALIBRATED classifier (%s, %d features) from %s",
-            method,
-            len(_clf_features) if _clf_features else 0,
-            CALIBRATED_MODEL_PATH,
-        )
-        return
+        try:
+            with open(CALIBRATED_MODEL_PATH, "rb") as f:
+                artifact = pickle.load(f)
+            _clf = artifact["model"]
+            _clf_features = artifact["feature_columns"]
+            method = artifact.get("method", "unknown")
+            logger.info(
+                "Loaded CALIBRATED classifier (%s, %d features) from %s",
+                method,
+                len(_clf_features) if _clf_features else 0,
+                CALIBRATED_MODEL_PATH,
+            )
+            _clf_loaded = True
+            return
+        except Exception as exc:
+            logger.error(
+                "Failed to load CALIBRATED classifier from %s: %s. "
+                "Ensure scikit-learn==1.7.1 is installed (match training environment). "
+                "Falling back to uncalibrated model.",
+                CALIBRATED_MODEL_PATH, exc,
+            )
 
     # Fall back to uncalibrated model
     if not MODEL_PATH.exists():
@@ -92,17 +103,26 @@ def _ensure_classifier_loaded() -> None:
             "Run `python -m models.train_and_evaluate` to train.",
             MODEL_PATH,
         )
+        _clf_loaded = True
         return
 
-    with open(MODEL_PATH, "rb") as f:
-        artifact = pickle.load(f)
-    _clf = artifact["model"]
-    _clf_features = artifact["feature_columns"]
-    logger.info(
-        "Loaded UNCALIBRATED classifier (%d features) from %s",
-        len(_clf_features) if _clf_features else 0,
-        MODEL_PATH,
-    )
+    try:
+        with open(MODEL_PATH, "rb") as f:
+            artifact = pickle.load(f)
+        _clf = artifact["model"]
+        _clf_features = artifact["feature_columns"]
+        logger.info(
+            "Loaded UNCALIBRATED classifier (%d features) from %s",
+            len(_clf_features) if _clf_features else 0,
+            MODEL_PATH,
+        )
+        _clf_loaded = True
+    except Exception as exc:
+        logger.error(
+            "Failed to load UNCALIBRATED classifier from %s: %s. "
+            "Ensure scikit-learn==1.7.1 is installed (match training environment).",
+            MODEL_PATH, exc,
+        )
 
 
 REASON_CODE_COLUMNS = [f"reason_code_{rc}" for rc in IN_SCOPE_REASON_CODES]
@@ -140,24 +160,18 @@ def _predict_win_probability(dispute: Dispute) -> float:
 
     if _clf is None or _clf_features is None:
         logger.warning(
-            "DIAGNOSTIC _predict_win_probability: classifier NOT loaded "
-            "(dispute=%s, reason=%s, amount=%d, docs=%d) -> returning 0.5. "
-            "CALIBRATED_MODEL_PATH=%s exists=%s MODEL_PATH=%s exists=%s",
-            dispute.dispute_id, dispute.reason_code, dispute.amount_paise,
-            len(dispute.documents),
-            CALIBRATED_MODEL_PATH, CALIBRATED_MODEL_PATH.exists(),
-            MODEL_PATH, MODEL_PATH.exists(),
+            "Classifier not loaded — returning default win_probability=0.5 "
+            "(dispute=%s, reason=%s)",
+            dispute.dispute_id, dispute.reason_code,
         )
         return 0.5
 
     X = pd.DataFrame([row])[_clf_features]
     proba = float(_clf.predict_proba(X)[0, 1])
     logger.info(
-        "DIAGNOSTIC _predict_win_probability: dispute=%s reason=%s "
-        "amount=%d docs=%d completeness=%.1f quality=%.1f -> proba=%.4f",
-        dispute.dispute_id, dispute.reason_code,
-        dispute.amount_paise, len(dispute.documents),
-        row["completeness"], row["quality"], proba,
+        "Win probability for %s: prob=%.4f (completeness=%.1f, quality=%.1f)",
+        dispute.dispute_id, proba,
+        row["completeness"], row["quality"],
     )
     return proba
 

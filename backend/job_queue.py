@@ -95,17 +95,6 @@ class _Worker(threading.Thread):
 
     def run(self) -> None:
         logger.info("Worker %d starting", self.worker_id)
-        # --- DIAGNOSTIC: log handler state at worker startup ---
-        import sys as _sys
-        _jq = _sys.modules.get("backend.job_queue")
-        logger.info(
-            "DIAGNOSTIC worker-%d init: job_queue_module=%s id=%d file=%s | "
-            "_HANDLERS_id=%d keys=%s",
-            self.worker_id,
-            getattr(_jq, "__name__", "?"), id(_jq) if _jq else 0,
-            getattr(_jq, "__file__", "?"),
-            id(_HANDLERS), list(_HANDLERS.keys()),
-        )
         self._recover_stale_jobs()
 
         while not self.shutdown_event.is_set():
@@ -127,23 +116,6 @@ class _Worker(threading.Thread):
         job_id = job["job_id"]
         job_type = job["job_type"]
         dispute_id = job["dispute_id"]
-
-        # --- DIAGNOSTIC: log handler registry state before dispatch ---
-        import sys
-        jq_mod = sys.modules.get("backend.job_queue")
-        logger.info(
-            "DIAGNOSTIC dispatch: job_id=%d type=%s | "
-            "job_queue_module=%s id=%d file=%s | "
-            "_HANDLERS_id=%d keys=%s | "
-            "score.case_present=%s score.case_handler=%s",
-            job_id, job_type,
-            getattr(jq_mod, "__name__", "?"),
-            id(jq_mod) if jq_mod else 0,
-            getattr(jq_mod, "__file__", "?"),
-            id(_HANDLERS), list(_HANDLERS.keys()),
-            "score.case" in _HANDLERS,
-            getattr(_HANDLERS.get("score.case"), "__module__", "MISSING"),
-        )
 
         handler = get_handler(job_type)
         if handler is None:
