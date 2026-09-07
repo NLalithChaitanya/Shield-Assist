@@ -74,6 +74,33 @@ from backend.repository import SQLiteRepository
 import backend.jobs  # noqa: F401  — triggers @register_handler decorators
 
 # ---------------------------------------------------------------------------
+# DIAGNOSTIC: Verify handler registration at import time
+# ---------------------------------------------------------------------------
+import backend.job_queue as _jq_module
+import logging as _early_log
+_early_log.basicConfig(level=_early_log.INFO)
+_early_log.getLogger("shield_assist.app").info(
+    "DIAGNOSTIC startup: job_queue module=%s id=%d file=%s",
+    _jq_module.__name__, id(_jq_module),
+    getattr(_jq_module, "__file__", "?"),
+)
+_early_log.getLogger("shield_assist.app").info(
+    "DIAGNOSTIC startup: _HANDLERS id=%d keys=%s",
+    id(_jq_module._HANDLERS), list(_jq_module._HANDLERS.keys()),
+)
+_early_log.getLogger("shield_assist.app").info(
+    "DIAGNOSTIC startup: score.case present=%s handler=%s",
+    "score.case" in _jq_module._HANDLERS,
+    getattr(_jq_module._HANDLERS.get("score.case"), "__module__", "MISSING"),
+)
+import backend.jobs as _bj_module
+_early_log.getLogger("shield_assist.app").info(
+    "DIAGNOSTIC startup: backend.jobs module=%s id=%d file=%s",
+    _bj_module.__name__, id(_bj_module),
+    getattr(_bj_module, "__file__", "?"),
+)
+
+# ---------------------------------------------------------------------------
 # Boot
 # ---------------------------------------------------------------------------
 

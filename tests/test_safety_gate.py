@@ -644,3 +644,80 @@ class TestHandlerRegistration:
             f"Expected at least 4 handlers registered at import time, "
             f"got {len(_HANDLERS)}: {list(_HANDLERS.keys())}"
         )
+
+    def test_fresh_process_startup_registers_handlers(self):
+        """Reproduce the exact Railway production startup in a fresh Python process.
+
+        This test spawns a new Python process that:
+        1. Imports backend.app (simulating uvicorn loading the module)
+        2. Checks that all 4 handlers are in _HANDLERS
+        3. Verifies that a worker thread can look up and call score.case
+
+        If this test passes locally but Railway fails, the issue is
+        in the deployment environment, not the code.
+        """
+        import subprocess, sys, os
+
+        test_script = '''
+import os, sys, threading
+os.environ["SHIELD_ASSIST_DB_PATH"] = ":memory:"
+
+# Step 1: Import app (simulates uvicorn backend.app:app)
+import backend.app
+
+# Step 2: Verify all handlers are registered
+from backend.job_queue import _HANDLERS, get_handler
+registered = list(_HANDLERS.keys())
+expected = ["score.case", "document.process", "draft.response", "contest.submit"]
+missing = [h for h in expected if h not in _HANDLERS]
+
+if missing:
+    print(f"FAIL: missing handlers: {missing}")
+    print(f"Registered: {registered}")
+    sys.exit(1)
+
+# Step 3: Verify worker thread can look up score.case handler
+result = {}
+def worker_check():
+    handler = get_handler("score.case")
+    result["found"] = handler is not None
+    result["module"] = handler.__module__ if handler else None
+    result["name"] = handler.__name__ if handler else None
+    result["same_dict"] = _HANDLERS is get_handler.__module__ and True
+    # Verify the handler is callable
+    if handler:
+        import inspect
+        result["callable"] = inspect.isfunction(handler)
+
+thread = threading.Thread(target=worker_check)
+thread.start()
+thread.join()
+
+if not result.get("found"):
+    print(f"FAIL: worker thread cannot find score.case handler")
+    sys.exit(1)
+
+if not result.get("callable"):
+    print(f"FAIL: score.case handler is not callable")
+    sys.exit(1)
+
+print(f"OK: all {len(_HANDLERS)} handlers registered")
+print(f"  score.case: {result['module']}.{result['name']}")
+print(f"  callable: {result['callable']}")
+sys.exit(0)
+'''
+
+        result = subprocess.run(
+            [sys.executable, "-c", test_script],
+            capture_output=True, text=True, cwd=os.getcwd(),
+            timeout=30,
+        )
+
+        assert result.returncode == 0, (
+            f"Fresh-process startup test FAILED (exit code {result.returncode})\n"
+            f"stdout: {result.stdout}\n"
+            f"stderr: {result.stderr}"
+        )
+        assert "OK: all 4 handlers registered" in result.stdout, (
+            f"Unexpected output: {result.stdout}"
+        )
