@@ -48,6 +48,7 @@ frontend/*.local
 # Temp files
 tmp_*.py
 _*.py
+!backend/jobs/__init__.py
 _*.js
 _*.tsx
 _*.b64
