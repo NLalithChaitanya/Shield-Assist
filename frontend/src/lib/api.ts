@@ -5,7 +5,7 @@
 
 import type { DisputeListItem, DisputeDetail, AuditResponse, Metrics } from './types';
 
-const BASE = '';  // proxied through Vite
+const BASE = import.meta.env.VITE_API_URL || '';
 
 async function get<T>(path: string): Promise<T> {
   const res = await fetch(`${BASE}${path}`);
@@ -170,8 +170,10 @@ export function streamCopilot(
 // ─── SSE for live updates ───
 // In dev, connect directly to the backend (port 8000) to bypass the
 // Vite proxy, which buffers streaming responses and breaks EventSource.
-// In production, the same-origin proxy handles SSE fine.
-const SSE_URL = import.meta.env.DEV ? 'http://127.0.0.1:8000/events' : '/events';
+// In production, use the same base URL as REST calls.
+const SSE_URL = import.meta.env.DEV
+  ? 'http://127.0.0.1:8000/events'
+  : `${BASE}/events`;
 
 export function subscribeSSE(
   onEvent: (eventType: string, data: Record<string, unknown>) => void,

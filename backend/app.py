@@ -217,9 +217,18 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# --- CORS ---
+# Always allow local dev origins.
+# Production: set FRONTEND_URL=https://your-app.vercel.app
+_frontend_url = os.environ.get("FRONTEND_URL", "")
+_cors_origins = ["http://localhost:5173", "http://127.0.0.1:5173"]
+if _frontend_url:
+    _cors_origins.append(_frontend_url)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_cors_origins,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )# ---------------------------------------------------------------------------

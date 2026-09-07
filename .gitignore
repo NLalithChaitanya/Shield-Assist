@@ -55,4 +55,10 @@ _*.json
 
 .freebuff/
 
+# Deployment
+.vercel/
+
+# Logs
+*.log
+
 node_modules/
