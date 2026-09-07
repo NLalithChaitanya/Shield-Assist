@@ -125,9 +125,6 @@ def _predict_win_probability(dispute: Dispute) -> float:
     """
     _ensure_classifier_loaded()
 
-    if _clf is None or _clf_features is None:
-        return 0.5
-
     required = required_slots_for(dispute.reason_code)
     present_slots = {doc.slot for doc in dispute.documents}
 
@@ -141,8 +138,28 @@ def _predict_win_probability(dispute: Dispute) -> float:
     for rc in IN_SCOPE_REASON_CODES:
         row[f"reason_code_{rc}"] = int(dispute.reason_code == rc)
 
+    if _clf is None or _clf_features is None:
+        logger.warning(
+            "DIAGNOSTIC _predict_win_probability: classifier NOT loaded "
+            "(dispute=%s, reason=%s, amount=%d, docs=%d) -> returning 0.5. "
+            "CALIBRATED_MODEL_PATH=%s exists=%s MODEL_PATH=%s exists=%s",
+            dispute.dispute_id, dispute.reason_code, dispute.amount_paise,
+            len(dispute.documents),
+            CALIBRATED_MODEL_PATH, CALIBRATED_MODEL_PATH.exists(),
+            MODEL_PATH, MODEL_PATH.exists(),
+        )
+        return 0.5
+
     X = pd.DataFrame([row])[_clf_features]
-    return float(_clf.predict_proba(X)[0, 1])
+    proba = float(_clf.predict_proba(X)[0, 1])
+    logger.info(
+        "DIAGNOSTIC _predict_win_probability: dispute=%s reason=%s "
+        "amount=%d docs=%d completeness=%.1f quality=%.1f -> proba=%.4f",
+        dispute.dispute_id, dispute.reason_code,
+        dispute.amount_paise, len(dispute.documents),
+        row["completeness"], row["quality"], proba,
+    )
+    return proba
 
 
 # ---------------------------------------------------------------------------

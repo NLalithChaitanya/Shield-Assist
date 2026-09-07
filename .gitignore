@@ -24,8 +24,7 @@ data/uploads/
 # Captured webhooks (local debug data)
 data/captured_webhooks/
 
-# ML model artifacts (trained, should not be regenerated from scratch)
-models/*.pkl
+# ML model artifacts
 models/__pycache__/
 
 # IDE
