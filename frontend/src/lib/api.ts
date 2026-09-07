@@ -62,6 +62,21 @@ export async function uploadDocument(
   return post(`/disputes/${disputeId}/documents`, form);
 }
 
+// ─── Replace evidence for a specific slot ───
+export async function replaceEvidence(
+  disputeId: string,
+  slot: string,
+  file: File,
+  quality = 'clear',
+  facts: Record<string, string> = {},
+): Promise<{ document_id: string; job_id: number; status: string; replaced: boolean }> {
+  const form = new FormData();
+  form.append('file', file);
+  form.append('quality', quality);
+  form.append('facts', JSON.stringify(facts));
+  return post(`/disputes/${disputeId}/evidence/${slot}/replace`, form);
+}
+
 // ─── Approve draft (writes human.approved audit event) ───
 export async function approveDraft(disputeId: string): Promise<{ status: string }> {
   return post(`/disputes/${disputeId}/approve`);

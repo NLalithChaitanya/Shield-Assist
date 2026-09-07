@@ -5,7 +5,7 @@
  */
 
 import { useState, useRef, useCallback } from 'react';
-import { Upload, FileText, Check, RefreshCw, X } from 'lucide-react';
+import { Upload, Check, RefreshCw, X } from 'lucide-react';
 import { uploadDocument } from '../../lib/api';
 
 interface UploadEvidenceProps {
@@ -16,46 +16,26 @@ interface UploadState {
   status: 'idle' | 'uploading' | 'processing' | 'done' | 'error';
   fileName?: string;
   error?: string;
-  progress?: string;
 }
-
-const PROCESSING_STEPS = [
-  'Uploading document',
-  'Reading document',
-  'Extracting facts',
-  'Checking consistency',
-  'Updating case',
-];
 
 export default function UploadEvidence({ disputeId }: UploadEvidenceProps) {
   const [state, setState] = useState<UploadState>({ status: 'idle' });
-  const [currentStep, setCurrentStep] = useState(0);
   const [dragOver, setDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleFile = useCallback(async (file: File) => {
     setState({ status: 'uploading', fileName: file.name });
-    setCurrentStep(0);
-
-    // Simulate processing steps while upload + job runs
-    const stepInterval = setInterval(() => {
-      setCurrentStep(prev => Math.min(prev + 1, PROCESSING_STEPS.length - 1));
-    }, 2000);
 
     try {
       setState({ status: 'processing', fileName: file.name });
       await uploadDocument(disputeId, file, 'others', 'clear');
-      clearInterval(stepInterval);
-      setCurrentStep(PROCESSING_STEPS.length - 1);
       setState({ status: 'done', fileName: file.name });
 
       // Reset after 3 seconds
       setTimeout(() => {
         setState({ status: 'idle' });
-        setCurrentStep(0);
       }, 3000);
     } catch (err) {
-      clearInterval(stepInterval);
       setState({
         status: 'error',
         fileName: file.name,
@@ -79,30 +59,15 @@ export default function UploadEvidence({ disputeId }: UploadEvidenceProps) {
   if (state.status === 'processing' || state.status === 'uploading') {
     return (
       <div className="border border-signal/20 rounded-lg bg-signal-bg/30 p-4">
-        <div className="flex items-center gap-2 mb-3">
-          <FileText size={14} className="text-signal" />
+        <div className="flex items-center gap-2 mb-2">
+          <RefreshCw size={14} className="text-signal animate-spin" />
           <span className="text-[12px] font-medium text-ink">
             Processing <span className="font-data">{state.fileName}</span>
           </span>
         </div>
-        <div className="space-y-1.5">
-          {PROCESSING_STEPS.map((step, i) => (
-            <div key={step} className="flex items-center gap-2">
-              <div className="w-3.5 h-3.5 flex items-center justify-center shrink-0">
-                {i < currentStep ? (
-                  <Check size={10} className="text-money" />
-                ) : i === currentStep ? (
-                  <RefreshCw size={10} className="text-signal animate-spin" />
-                ) : (
-                  <div className="w-1.5 h-1.5 rounded-full bg-ink-faint" />
-                )}
-              </div>
-              <span className={`text-[11px] ${i === currentStep ? 'text-ink font-medium' : i < currentStep ? 'text-ink-muted' : 'text-ink-faint'}`}>
-                {step}
-              </span>
-            </div>
-          ))}
-        </div>
+        <p className="text-[11px] text-ink-muted ml-[22px]">
+          Extracting evidence and recalculating your case.
+        </p>
       </div>
     );
   }

@@ -11,7 +11,7 @@
 
 import { useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { ArrowLeft, AlertTriangle, Clock } from 'lucide-react';
+import { ArrowLeft, AlertTriangle, Clock, RefreshCw } from 'lucide-react';
 import { useDispute } from '../../hooks/useQueries';
 import { uploadDocument } from '../../lib/api';
 import { formatPaiseFull, timeUntil, reasonCodeLabel, REASON_CODES, SLOT_NAMES } from '../../lib/types';
@@ -22,6 +22,7 @@ import ResponseEditor from './ResponseEditor';
 import AuditTimeline from './AuditTimeline';
 import CopilotPanel from '../copilot/CopilotPanel';
 import UploadEvidence from '../evidence/UploadEvidence';
+import IssueCard from './IssueCard';
 import EmptyState from '../ui/EmptyState';
 
 export default function CaseWorkspace() {
@@ -204,39 +205,6 @@ function ActionItemsPanel({ dispute }: { dispute: DisputeDetail }) {
   const missingSlots = scores?.missing_required_slots ?? [];
   const contradictions = scores?.contradiction_flags ?? [];
 
-  // Build a map from document_id to human-friendly name
-  const docNameMap = new Map<string, string>();
-  for (const doc of dispute.documents) {
-    const slotName = SLOT_NAMES[doc.evidence_slot] ?? doc.evidence_slot.replace(/_/g, ' ');
-    docNameMap.set(doc.document_id, slotName);
-  }
-
-  const getDocLabel = (docId: string) => {
-    if (docNameMap.has(docId)) return `Your ${docNameMap.get(docId)} document`;
-    return `Document ${docId.slice(0, 8)}`;
-  };
-
-  // Translate contradiction rule types into plain language
-  const translateContradiction = (flag: { rule_type: string; detail: string; documents_involved: string[] }) => {
-    const docLabels = flag.documents_involved.map(d => getDocLabel(d));
-
-    if (flag.rule_type === 'date_order_violation') {
-      return `${docLabels[0] || 'A document'} has a date that falls after the dispute date — this looks backwards and needs checking.`;
-    }
-    if (flag.rule_type === 'order_id_mismatch') {
-      // Try to extract the two order IDs from the detail string
-      const orderIdMatch = flag.detail.match(/order ID '([^']+)'/g);
-      if (orderIdMatch && orderIdMatch.length >= 2) {
-        const docOrderId = orderIdMatch[0].match(/'([^']+)'/)?.[1] ?? '';
-        const disputeOrderId = orderIdMatch[1].match(/'([^']+)'/)?.[1] ?? '';
-        return `The order number on ${docLabels[0] || 'a document'} (${docOrderId}) doesn't match this dispute's order number (${disputeOrderId}) — please confirm this is the right document.`;
-      }
-      return `${docLabels[0] || 'A document'} references a different order number than this dispute — please confirm the document belongs to this case.`;
-    }
-    // Fallback: generic plain-language wrapping
-    return `There's a potential issue with ${docLabels[0] || 'one of your documents'}. ${flag.detail}`;
-  };
-
   return (
     <div className="border border-urgent/20 rounded-lg bg-urgent-bg/30">
       {/* Summary banner */}
@@ -274,7 +242,7 @@ function ActionItemsPanel({ dispute }: { dispute: DisputeDetail }) {
           </div>
         )}
 
-        {/* Contradictions */}
+        {/* Contradictions — each with View/Replace actions */}
         {contradictions.length > 0 && (
           <div>
             <div className="text-[11px] font-semibold text-ink-faint uppercase tracking-wider mb-2">
@@ -282,12 +250,7 @@ function ActionItemsPanel({ dispute }: { dispute: DisputeDetail }) {
             </div>
             <div className="space-y-2">
               {contradictions.map((flag, i) => (
-                <div key={i} className="flex items-start gap-2 p-2.5 rounded-md bg-surface-raised border border-line">
-                  <AlertTriangle size={12} className="text-urgent mt-0.5 shrink-0" />
-                  <span className="text-[12px] text-ink leading-relaxed">
-                    {translateContradiction(flag)}
-                  </span>
-                </div>
+                <IssueCard key={i} dispute={dispute} flag={flag} />
               ))}
             </div>
           </div>
@@ -301,7 +264,8 @@ function ActionItemsPanel({ dispute }: { dispute: DisputeDetail }) {
 // ─── Missing Evidence Row with inline upload button ───
 function MissingEvidenceRow({ slot, disputeId }: { slot: string; disputeId: string }) {
   const slotName = SLOT_NAMES[slot] ?? slot.replace(/_/g, ' ');
-  const [uploading, setUploading] = useState(false);
+  const [uploadState, setUploadState] = useState<'idle' | 'uploading' | 'processing' | 'error'>('idle');
+  const [uploadError, setUploadError] = useState('');
 
   const inputId = `upload-${slot}-${disputeId}`;
 
@@ -313,16 +277,62 @@ function MissingEvidenceRow({ slot, disputeId }: { slot: string; disputeId: stri
   const onFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    setUploading(true);
+    setUploadState('uploading');
+    setUploadError('');
     try {
       await uploadDocument(disputeId, file, slot, 'clear');
-    } catch {
-      // Error handled by UploadEvidence component state
-    } finally {
-      setUploading(false);
-      e.target.value = '';
+      // Upload succeeded — show processing state.
+      // The backend will: extract facts → enqueue score.case → broadcast SSE.
+      // React Query will refetch the dispute on SSE events, causing this
+      // component to re-render. If the slot is no longer missing, this
+      // component naturally disappears from the list.
+      setUploadState('processing');
+    } catch (err) {
+      setUploadState('error');
+      setUploadError(err instanceof Error ? err.message : 'Upload failed');
     }
   };
+
+  if (uploadState === 'uploading') {
+    return (
+      <div className="flex items-center gap-2 p-2 rounded-md border border-signal/20 bg-signal-bg/30">
+        <RefreshCw size={10} className="text-signal animate-spin shrink-0" />
+        <span className="text-[12px] text-ink flex-1">Uploading {slotName}…</span>
+      </div>
+    );
+  }
+
+  if (uploadState === 'processing') {
+    return (
+      <div className="flex items-center gap-2 p-2 rounded-md border border-signal/20 bg-signal-bg/30">
+        <RefreshCw size={10} className="text-signal animate-spin shrink-0" />
+        <div className="flex-1 min-w-0">
+          <span className="text-[12px] text-ink">Processing {slotName}…</span>
+          <div className="text-[10px] text-ink-muted mt-0.5">Extracting evidence and recalculating your case</div>
+        </div>
+      </div>
+    );
+  }
+
+  if (uploadState === 'error') {
+    return (
+      <div className="flex items-center gap-2 p-2 rounded-md border border-urgent/15 bg-urgent-bg/30">
+        <div className="w-1.5 h-1.5 rounded-full bg-urgent shrink-0" />
+        <div className="flex-1 min-w-0">
+          <span className="text-[12px] text-ink">{slotName}</span>
+          {uploadError && (
+            <div className="text-[10px] text-urgent/80 mt-0.5 truncate">{uploadError}</div>
+          )}
+        </div>
+        <button
+          onClick={() => setUploadState('idle')}
+          className="text-[11px] font-medium text-urgent hover:text-urgent/80 border border-urgent/20 rounded px-2.5 py-0.5 hover:bg-urgent-bg/50 transition-colors"
+        >
+          Retry
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div className="flex items-center gap-2 p-2 rounded-md border border-urgent/15 bg-surface-raised">
@@ -337,10 +347,9 @@ function MissingEvidenceRow({ slot, disputeId }: { slot: string; disputeId: stri
       />
       <button
         onClick={handleUpload}
-        disabled={uploading}
-        className="text-[11px] font-medium text-signal hover:text-signal/80 border border-signal/20 rounded px-2.5 py-0.5 hover:bg-signal-bg/50 transition-colors disabled:opacity-50"
+        className="text-[11px] font-medium text-signal hover:text-signal/80 border border-signal/20 rounded px-2.5 py-0.5 hover:bg-signal-bg/50 transition-colors"
       >
-        {uploading ? 'Uploading…' : 'Upload'}
+        Upload
       </button>
     </div>
   );

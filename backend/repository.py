@@ -79,6 +79,7 @@ class CaseRepository(Protocol):
     def save_fact(self, fact: dict) -> None: ...
     def find_cached_extraction(self, content_hash: str, dispute_id: str) -> Optional[dict]: ...
     def copy_facts(self, source_doc_id: str, target_doc_id: str, dispute_id: str) -> None: ...
+    def replace_evidence(self, dispute_id: str, evidence_slot: str, new_doc_id: str) -> list[str]: ...
 
     # -- Scores + decisions -------------------------------------------------
 
@@ -386,55 +387,84 @@ class SQLiteRepository:
         finally:
             conn.close()
 
-    def find_cached_extraction(self, content_hash: str, dispute_id: str) -> Optional[dict]:
+    def find_cached_extraction(self, content_hash: str, dispute_id: str, exclude_doc_id: str | None = None) -> Optional[dict]:
         """Find an existing document with the same SHA-256 that already
-        has extracted facts, within the same dispute.
+        has extracted facts.
+
+        First checks within the same dispute, then falls back to any
+        dispute (facts are universal — the same file contains the same
+        facts regardless of which dispute it belongs to).
+
+        Args:
+            content_hash: SHA-256 hex digest of the uploaded file.
+            dispute_id: The current dispute to check first.
+            exclude_doc_id: Optional document ID to exclude from results
+                           (the newly-saved document that hasn't been
+                           processed yet).
 
         Returns the document row dict if found, None otherwise.
-        Used to skip redundant Gemini OCR when the same file is
-        uploaded again.
         """
         if not content_hash:
             return None
         conn = self._conn()
         try:
+            # Same-dispute cache: faster, avoids cross-dispute lookups
+            params: list = [content_hash, dispute_id]
+            exclude_clause = ""
+            if exclude_doc_id:
+                exclude_clause = "AND d.document_id != ?"
+                params.append(exclude_doc_id)
             row = conn.execute(
-                """SELECT d.document_id, d.content_hash
+                f"""SELECT d.document_id, d.content_hash
                    FROM documents d
                    WHERE d.content_hash = ?
                      AND d.dispute_id = ?
-                     AND d.document_id != d.document_id
+                     {exclude_clause}
                      AND EXISTS (
                          SELECT 1 FROM extracted_facts f
                          WHERE f.document_id = d.document_id
                      )
                    LIMIT 1""",
-                (content_hash, dispute_id),
+                params,
             ).fetchone()
             if row:
                 return dict(row)
-            # Also check any other dispute — facts are universal
+            # Cross-dispute cache: facts are universal
+            params2: list = [content_hash]
+            exclude_clause2 = ""
+            if exclude_doc_id:
+                exclude_clause2 = "AND d.document_id != ?"
+                params2.append(exclude_doc_id)
             row = conn.execute(
-                """SELECT d.document_id, d.content_hash
+                f"""SELECT d.document_id, d.content_hash
                    FROM documents d
                    WHERE d.content_hash = ?
+                     {exclude_clause2}
                      AND EXISTS (
                          SELECT 1 FROM extracted_facts f
                          WHERE f.document_id = d.document_id
                      )
                    LIMIT 1""",
-                (content_hash,),
+                params2,
             ).fetchone()
             return dict(row) if row else None
         finally:
             conn.close()
 
-    def copy_facts(self, source_doc_id: str, target_doc_id: str, dispute_id: str) -> None:
+    def copy_facts(self, source_doc_id: str, target_doc_id: str, dispute_id: str) -> int:
         """Copy all extracted facts from source_doc_id to target_doc_id.
 
         Used when a duplicate file is uploaded and we skip Gemini OCR.
         The fact_type/fact_value are copied as-is; only document_id
         and extracted_at (set to now) change.
+
+        NOTE: We read facts from the source document WITHOUT filtering
+        by dispute_id, because the cached source document may belong to
+        a different dispute (cross-dispute cache hit). Facts are
+        universal — the same file contains the same facts regardless of
+        which dispute it was uploaded to.
+
+        Returns the number of facts copied.
         """
         from datetime import datetime, timezone
         now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -442,8 +472,8 @@ class SQLiteRepository:
         try:
             facts = conn.execute(
                 """SELECT fact_type, fact_value FROM extracted_facts
-                   WHERE document_id = ? AND dispute_id = ?""",
-                (source_doc_id, dispute_id),
+                   WHERE document_id = ?""",
+                (source_doc_id,),
             ).fetchall()
             for f in facts:
                 conn.execute(
@@ -453,6 +483,40 @@ class SQLiteRepository:
                     (target_doc_id, dispute_id, f["fact_type"], f["fact_value"], now_iso),
                 )
             conn.commit()
+            return len(facts)
+        finally:
+            conn.close()
+
+    def replace_evidence(self, dispute_id: str, evidence_slot: str, new_doc_id: str) -> list[str]:
+        """Replace evidence for a specific slot in a dispute.
+
+        Deletes all extracted_facts for documents in the given slot,
+        so that the new document's facts become the sole source.
+        The old document rows are preserved for audit trail but their
+        facts are removed to prevent stale contradictions.
+
+        Returns a list of old document_id values whose facts were removed.
+        """
+        conn = self._conn()
+        try:
+            # Find old documents in this slot
+            old_docs = conn.execute(
+                """SELECT document_id FROM documents
+                 WHERE dispute_id = ? AND evidence_slot = ?
+                 AND document_id != ?""",
+                (dispute_id, evidence_slot, new_doc_id),
+            ).fetchall()
+            old_doc_ids = [r["document_id"] for r in old_docs]
+
+            # Delete their facts (prevents stale contradictions)
+            for doc_id in old_doc_ids:
+                conn.execute(
+                    "DELETE FROM extracted_facts WHERE document_id = ?",
+                    (doc_id,),
+                )
+
+            conn.commit()
+            return old_doc_ids
         finally:
             conn.close()
 

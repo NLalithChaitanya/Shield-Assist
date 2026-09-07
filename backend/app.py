@@ -600,12 +600,36 @@ async def upload_document(
     # --- Extraction cache check ---
     # If an identical file (same SHA-256) was already extracted for this
     # dispute, copy the cached facts instead of re-calling Gemini OCR.
+    # Cross-dispute cache hits are valid because facts are universal
+    # (the same file contains the same extracted facts regardless of
+    # which dispute it belongs to).
+    #
+    # IMPORTANT: We always enqueue document.process (with cached facts
+    # as form_facts) so the standard pipeline saves facts + enqueues
+    # score.case atomically. This avoids a race condition where
+    # copy_facts + separate score.case could see stale data.
     ocr_skipped = False
-    cached = repo.find_cached_extraction(content_hash, dispute_id)
+    cached = repo.find_cached_extraction(content_hash, dispute_id, exclude_doc_id=document_id)
     if cached:
-        repo.copy_facts(cached["document_id"], document_id, dispute_id)
+        # Load cached facts from the source document
+        conn_cache = repo.connection()
+        try:
+            cached_facts_rows = conn_cache.execute(
+                """SELECT fact_type, fact_value FROM extracted_facts
+                   WHERE document_id = ?""",
+                (cached["document_id"],),
+            ).fetchall()
+            cached_facts = {r["fact_type"]: r["fact_value"] for r in cached_facts_rows}
+        finally:
+            conn_cache.close()
         ocr_skipped = True
-        job_id = None
+        # Route through document.process with cached facts as form_facts.
+        # The job handler will save facts + enqueue score.case in one
+        # pipeline, avoiding any stale-data race.
+        job_id = repo.enqueue_job("document.process", dispute_id, {
+            "document_id": document_id,
+            "facts": cached_facts,
+        })
     else:
         # --- Enqueue document.process job (Gemini OCR) ---
         job_id = repo.enqueue_job("document.process", dispute_id, {
@@ -621,7 +645,7 @@ async def upload_document(
             "evidence_slot": canonical_slot,
             "original_slot": evidence_slot,
             "quality": effective_quality,
-            "fact_count": len(facts_dict),
+            "fact_count": len(cached_facts) if ocr_skipped else len(facts_dict),
             "content_hash": content_hash,
             "ocr_skipped": ocr_skipped,
             "cached_from": cached["document_id"] if cached else None,
@@ -648,6 +672,125 @@ async def upload_document(
         "ocr_skipped": ocr_skipped,
         "cached_from": cached["document_id"] if cached else None,
         "message": "Document uploaded and queued for processing." if not ocr_skipped else "Document uploaded; facts reused from cached extraction.",
+    }
+
+
+# ===================================================================
+# POST /disputes/{dispute_id}/evidence/{slot}/replace  —  replace evidence
+# ===================================================================
+
+@app.post("/disputes/{dispute_id}/evidence/{slot}/replace")
+async def replace_evidence(
+    dispute_id: str,
+    slot: str,
+    file: UploadFile = File(...),
+    quality: str = Form("unknown"),
+    facts: str = Form("{}"),
+):
+    """Replace evidence for a specific slot in a dispute.
+
+    1. Validates dispute and slot exist.
+    2. Stores the new file.
+    3. Deletes old facts for the slot (prevents stale contradictions).
+    4. Saves the new document row.
+    5. Enqueues document.process -> score.case pipeline.
+    6. Records audit trail for the replacement.
+    """
+    # --- Validate dispute exists ---
+    dispute = repo.get(dispute_id)
+    if dispute is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Dispute {dispute_id!r} not found.",
+        )
+
+    # --- Normalize evidence slot ---
+    canonical_slot = normalize_evidence_slot(slot)
+
+    # --- Generate document ID and store file ---
+    document_id = f"doc_{uuid.uuid4().hex[:12]}"
+    local_path, size_bytes, mime_type, content_hash = await _store_upload(
+        file, dispute_id, document_id
+    )
+
+    # --- Compute quality ---
+    computed_quality, variance = assess_document_quality(local_path, mime_type)
+    effective_quality = quality if quality in ("clear", "degraded") else computed_quality
+
+    # --- Replace: delete old facts for this slot, save new document ---
+    now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+    # Find old documents in this slot to record them in the audit
+    old_docs = [
+        d for d in repo.get_documents(dispute_id)
+        if d["evidence_slot"] == canonical_slot
+    ]
+    old_doc_ids = [d["document_id"] for d in old_docs]
+
+    # Delete old facts + save new document + facts atomically
+    replaced_ids = repo.replace_evidence(dispute_id, canonical_slot, document_id)
+
+    repo.save_document({
+        "document_id": document_id,
+        "dispute_id": dispute_id,
+        "evidence_slot": canonical_slot,
+        "local_path": local_path,
+        "content_hash": content_hash,
+        "mime_type": mime_type,
+        "size_bytes": size_bytes,
+        "quality": effective_quality,
+        "uploaded_at": now_iso,
+    })
+
+    # --- Audit: evidence replacement ---
+    repo.write_audit({
+        "dispute_id": dispute_id,
+        "stage": "evidence.replaced",
+        "detail": {
+            "slot": canonical_slot,
+            "old_document_ids": replaced_ids,
+            "new_document_id": document_id,
+            "quality": effective_quality,
+            "old_facts_removed": len(replaced_ids),
+        },
+        "success": True,
+    })
+
+    # --- Parse facts JSON (for testing; in production, Gemini OCR extracts facts) ---
+    try:
+        facts_dict = json.loads(facts) if facts else {}
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="Invalid JSON in 'facts' field.")
+
+    # --- Enqueue document.process (standard pipeline) ---
+    job_id = repo.enqueue_job("document.process", dispute_id, {
+        "document_id": document_id,
+        "facts": facts_dict,
+    })
+
+    # --- Broadcast SSE ---
+    _broadcast_sse("document.uploaded", {
+        "dispute_id": dispute_id,
+        "document_id": document_id,
+        "evidence_slot": canonical_slot,
+        "replaced": True,
+        "old_document_ids": replaced_ids,
+    })
+
+    logger.info(
+        "Evidence replaced: dispute=%s slot=%s old=%s new=%s",
+        dispute_id, canonical_slot, replaced_ids, document_id,
+    )
+
+    return {
+        "dispute_id": dispute_id,
+        "document_id": document_id,
+        "evidence_slot": canonical_slot,
+        "job_id": job_id,
+        "replaced": True,
+        "old_document_ids": replaced_ids,
+        "status": "processing",
+        "message": f"Evidence for {canonical_slot} replaced. Reprocessing.",
     }
 
 
