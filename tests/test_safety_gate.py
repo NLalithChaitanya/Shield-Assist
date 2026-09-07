@@ -594,3 +594,53 @@ class TestHumanApprovalBoundary:
         # Try approve without draft → must be 400
         r = client.post("/disputes/disp_nodraft_001/approve")
         assert r.status_code == 400, f"Expected 400, got {r.status_code}"
+
+
+# ─── Regression: handler registration at import time ───────────────
+
+class TestHandlerRegistration:
+    """Verify that all job handlers are registered when backend.app is imported.
+
+    This is a regression test for a Railway production bug where workers
+    claimed 'score.case' jobs but found no handler because handler
+    registration happened lazily inside the lifespan instead of at module
+    import time.
+    """
+
+    def test_score_case_handler_registered_at_import(self):
+        """score.case handler must be registered the instant backend.app is imported."""
+        import importlib
+        import backend.app as app_mod
+        importlib.reload(app_mod)  # re-execute module-level code
+
+        from backend.job_queue import get_handler
+        handler = get_handler("score.case")
+        assert handler is not None, (
+            "score.case handler is NOT registered at module level. "
+            "This will cause 'No handler registered for job_type=score.case' "
+            "on production deployments."
+        )
+
+    def test_all_handlers_registered_at_import(self):
+        """All four job handlers must be registered at module import time."""
+        import importlib
+        import backend.app as app_mod
+        importlib.reload(app_mod)
+
+        from backend.job_queue import get_handler
+        expected = ["score.case", "document.process", "draft.response", "contest.submit"]
+        for job_type in expected:
+            handler = get_handler(job_type)
+            assert handler is not None, (
+                f"{job_type!r} handler is NOT registered at module level."
+            )
+
+    def test_handlers_available_before_lifespan(self):
+        """Handlers must be registered BEFORE lifespan runs (module level)."""
+        from backend.job_queue import _HANDLERS
+        # _HANDLERS is populated by @register_handler decorators,
+        # which run when backend.jobs is imported at module level in app.py.
+        assert len(_HANDLERS) >= 4, (
+            f"Expected at least 4 handlers registered at import time, "
+            f"got {len(_HANDLERS)}: {list(_HANDLERS.keys())}"
+        )

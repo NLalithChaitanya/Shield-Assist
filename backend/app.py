@@ -68,6 +68,11 @@ from backend.razorpay_config import RazorpayConfig
 from backend.quality_detection import assess_document_quality
 from backend.repository import SQLiteRepository
 
+# Import job handlers at MODULE LEVEL so they are registered the instant
+# this module is loaded — not lazily inside the lifespan.  This prevents
+# the race where a worker claims a job before the lifespan runs.
+import backend.jobs  # noqa: F401  — triggers @register_handler decorators
+
 # ---------------------------------------------------------------------------
 # Boot
 # ---------------------------------------------------------------------------
@@ -193,9 +198,7 @@ async def lifespan(app: FastAPI):
     init_db()
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
-    # Import job handlers to trigger registration
-    import backend.jobs  # noqa: F401
-
+    # Handlers already registered at module level (see top of file).
     job_queue.start()
     logger.info("Shield Assist started — workers running")
 
