@@ -1932,8 +1932,10 @@ def simulate_razorpay_dispute(
 
     order_id = resolve_order_id(webhook_payload)
 
-    # Atomic idempotent insert + enqueue (same as webhook handler)
-    was_present, job_id = repo.idempotent_insert_dispute(
+    # Insert dispute without scoring yet — simulated documents are saved
+    # synchronously below, then a single score.case job runs with all docs
+    # in place (avoids a race where an early score overwrites correct results).
+    was_present, _initial_job_id = repo.idempotent_insert_dispute(
         row={
             "dispute_id": row.dispute_id,
             "payment_id": row.payment_id,
@@ -1950,8 +1952,7 @@ def simulate_razorpay_dispute(
             "ingested_at": now_iso,
             "updated_at": now_iso,
         },
-        job_type="score.case",
-        job_payload={},
+        job_type=None,
     )
 
     if was_present:
@@ -1975,13 +1976,6 @@ def simulate_razorpay_dispute(
         "success": True,
     })
 
-    repo.write_audit({
-        "dispute_id": row.dispute_id,
-        "stage": "queue",
-        "detail": {"job_id": job_id, "job_type": "score.case"},
-        "success": True,
-    })
-
     repo.update_webhook_event_status(event_id, "processed", dispute_id=row.dispute_id)
 
     _broadcast_sse("dispute.received", {
@@ -1993,6 +1987,7 @@ def simulate_razorpay_dispute(
 
     # Now upload simulated evidence documents
     uploaded_docs = []
+    job_id = None
     for slot, facts in facts_sets.items():
         doc_id = f"doc_sim_{uuid.uuid4().hex[:10]}"
         now_doc_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -2024,9 +2019,15 @@ def simulate_razorpay_dispute(
             "evidence_slot": slot,
         })
 
-    # Enqueue re-score with all simulated documents in place
+    # Enqueue a single score.case with all simulated documents in place
     if uploaded_docs:
-        repo.enqueue_job("score.case", row.dispute_id, {})
+        job_id = repo.enqueue_job("score.case", row.dispute_id, {})
+        repo.write_audit({
+            "dispute_id": row.dispute_id,
+            "stage": "queue",
+            "detail": {"job_id": job_id, "job_type": "score.case"},
+            "success": True,
+        })
 
     logger.info(
         "Simulated dispute created: dispute=%s scenario=%s docs=%d",

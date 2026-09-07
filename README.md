@@ -542,7 +542,7 @@ All reported model metrics are from the **held-out synthetic evaluation data**.
 
 ### Key result
 
-> **91.0% precision with the full safety gate vs. 77.6% with the classifier alone.**
+> **91.0% precision with the full safety gate vs. 77.6% with the classifier alone** on the held-out synthetic test set.
 
 The improvement comes from combining:
 
@@ -684,7 +684,11 @@ The merchant sees **what matters most first**, rather than a flat case list.
 
 # 🎬 1️⃣3️⃣ The Demo
 
-The strongest demonstration is **two cases**, not a feature tour.
+The strongest demonstration is a **three-case workflow**, not a feature tour.
+
+1. **Evidence completion** — an incomplete case becomes stronger as required evidence is uploaded.
+2. **Contradiction blocking** — a high-probability case is blocked when evidence conflicts.
+3. **Safe preparation** — a complete and consistent case reaches PREPARE, generates a grounded draft, and requires human approval before submission.
 
 ## Case 1 — Evidence makes the case stronger
 
@@ -698,7 +702,7 @@ Only Proof of Service exists.
 
 ```text
 Completeness: 33%
-Win probability: ~10%
+Win probability: ~9%
 Decision: LOW PRIORITY
 ```
 
@@ -708,8 +712,9 @@ Customer Communication is uploaded.
 
 ```text
 Completeness: 67%
-Win probability: ~10%
-Decision: LOW PRIORITY
+Win probability: ~81%
+Decision: BLOCKED
+Reason: Required evidence is still missing
 ```
 
 The system intentionally does **not** manufacture a smooth probability increase.
@@ -781,7 +786,7 @@ The merchant sees the actual failing conditions in plain language.
 
 # 🧪 1️⃣4️⃣ Adversarial Safety Testing
 
-The repository contains **23 automated safety tests** targeting the core safety boundary.
+The repository contains **150 automated backend tests**, including **23 dedicated adversarial safety-gate tests** targeting the core safety boundary.
 
 | Scenario                                 | Expected                       |
 | ---------------------------------------- | ------------------------------ |
@@ -827,7 +832,11 @@ The implementation still includes:
 * idempotency,
 * error handling.
 
-The final Contest API call can be validated against the first real contestable dispute in Live Mode.
+The contest submission flow is implemented end-to-end, including human approval enforcement.
+
+However, the final live Contest API call requires a real contestable dispute in Live Mode.
+
+The hackathon demo simulates the dispute and exercises the full pipeline up to submission, but must not represent a simulated test-mode case as having been won.
 
 ### Hackathon demo architecture
 

@@ -54,3 +54,5 @@ _*.b64
 _*.json
 
 .freebuff/
+
+node_modules/

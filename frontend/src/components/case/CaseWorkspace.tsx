@@ -9,7 +9,7 @@
  *   6. Activity log (secondary tab)
  */
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { ArrowLeft, AlertTriangle, Clock, RefreshCw } from 'lucide-react';
 import { useDispute } from '../../hooks/useQueries';
@@ -266,17 +266,39 @@ function MissingEvidenceRow({ slot, disputeId }: { slot: string; disputeId: stri
   const slotName = SLOT_NAMES[slot] ?? slot.replace(/_/g, ' ');
   const [uploadState, setUploadState] = useState<'idle' | 'uploading' | 'processing' | 'error'>('idle');
   const [uploadError, setUploadError] = useState('');
+  const { data: dispute } = useDispute(disputeId);
 
   const inputId = `upload-${slot}-${disputeId}`;
+  const isBusy = uploadState === 'uploading' || uploadState === 'processing';
+
+  // Sync local state with backend: detect failed processing or completion
+  useEffect(() => {
+    if (uploadState !== 'processing' || !dispute) return;
+
+    const stillMissing = dispute.scores?.missing_required_slots.includes(slot) ?? true;
+    const hasDoc = dispute.documents.some(d => d.evidence_slot === slot);
+    const failedJob = dispute.jobs?.some(
+      j => j.job_type === 'document.process' && j.status === 'failed',
+    );
+
+    if (failedJob && stillMissing) {
+      setUploadState('error');
+      setUploadError("We couldn't process this document.");
+    } else if (!stillMissing && hasDoc) {
+      // Slot satisfied — parent will unmount this row on next render
+      setUploadState('idle');
+    }
+  }, [dispute, uploadState, slot]);
 
   const handleUpload = () => {
+    if (isBusy) return;
     const input = document.getElementById(inputId) as HTMLInputElement | null;
     if (input) input.click();
   };
 
   const onFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file) return;
+    if (!file || isBusy) return;
     setUploadState('uploading');
     setUploadError('');
     try {
@@ -290,6 +312,8 @@ function MissingEvidenceRow({ slot, disputeId }: { slot: string; disputeId: stri
     } catch (err) {
       setUploadState('error');
       setUploadError(err instanceof Error ? err.message : 'Upload failed');
+    } finally {
+      e.target.value = '';
     }
   };
 
@@ -317,18 +341,19 @@ function MissingEvidenceRow({ slot, disputeId }: { slot: string; disputeId: stri
   if (uploadState === 'error') {
     return (
       <div className="flex items-center gap-2 p-2 rounded-md border border-urgent/15 bg-urgent-bg/30">
-        <div className="w-1.5 h-1.5 rounded-full bg-urgent shrink-0" />
+        <AlertTriangle size={12} className="text-urgent shrink-0" />
         <div className="flex-1 min-w-0">
-          <span className="text-[12px] text-ink">{slotName}</span>
+          <span className="text-[12px] text-ink font-medium">Processing failed</span>
+          <div className="text-[10px] text-ink-muted mt-0.5">{slotName}</div>
           {uploadError && (
-            <div className="text-[10px] text-urgent/80 mt-0.5 truncate">{uploadError}</div>
+            <div className="text-[10px] text-urgent/80 mt-0.5">{uploadError}</div>
           )}
         </div>
         <button
-          onClick={() => setUploadState('idle')}
+          onClick={() => { setUploadState('idle'); setUploadError(''); }}
           className="text-[11px] font-medium text-urgent hover:text-urgent/80 border border-urgent/20 rounded px-2.5 py-0.5 hover:bg-urgent-bg/50 transition-colors"
         >
-          Retry
+          Try again
         </button>
       </div>
     );
@@ -336,18 +361,23 @@ function MissingEvidenceRow({ slot, disputeId }: { slot: string; disputeId: stri
 
   return (
     <div className="flex items-center gap-2 p-2 rounded-md border border-urgent/15 bg-surface-raised">
-      <div className="w-1.5 h-1.5 rounded-full bg-urgent shrink-0" />
-      <span className="text-[12px] text-ink flex-1">{slotName}</span>
+      <AlertTriangle size={12} className="text-urgent shrink-0" />
+      <div className="flex-1 min-w-0">
+        <span className="text-[12px] text-ink font-medium">{slotName}</span>
+        <div className="text-[10px] text-ink-muted mt-0.5">Required evidence missing</div>
+      </div>
       <input
         id={inputId}
         type="file"
         accept=".pdf,.png,.jpg,.jpeg"
         onChange={onFileChange}
         className="hidden"
+        disabled={isBusy}
       />
       <button
         onClick={handleUpload}
-        className="text-[11px] font-medium text-signal hover:text-signal/80 border border-signal/20 rounded px-2.5 py-0.5 hover:bg-signal-bg/50 transition-colors"
+        disabled={isBusy}
+        className="text-[11px] font-medium text-signal hover:text-signal/80 border border-signal/20 rounded px-2.5 py-0.5 hover:bg-signal-bg/50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
       >
         Upload
       </button>

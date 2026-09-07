@@ -156,11 +156,15 @@ def evaluate_dispute(
     ... (docstring unchanged) ...
     """
     required = required_slots_for(dispute.reason_code)
-    present_slots = {d.slot for d in dispute.documents}
+    # Only count evidence slots whose documents have successfully extracted
+    # facts. A row in `documents` alone (upload accepted, processing pending
+    # or failed) must not increase completeness or satisfy requirements.
+    processed_documents = [d for d in dispute.documents if d.fields]
+    present_slots = {d.slot for d in processed_documents}
     missing_required = {s.value for s in required} - present_slots
 
     flags = run_all_contradiction_checks(
-        dispute.documents,
+        processed_documents,
         dispute_date_iso=dispute.dispute_date,
         expected_customer_name=dispute.customer_name,
         expected_order_id=dispute.order_id,
@@ -168,7 +172,7 @@ def evaluate_dispute(
     )
 
     completeness = completeness_score(present_slots, dispute.reason_code)
-    quality = quality_score(dispute.documents)
+    quality = quality_score(processed_documents or dispute.documents)
     consistency = consistency_score(flags)
 
     gate = apply_gate(

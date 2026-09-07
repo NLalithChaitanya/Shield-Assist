@@ -217,7 +217,12 @@ class SQLiteRepository:
         finally:
             conn.close()
 
-    def idempotent_insert_dispute(self, row: dict, job_type: str, job_payload: dict) -> tuple[bool, int | None]:
+    def idempotent_insert_dispute(
+        self,
+        row: dict,
+        job_type: str | None,
+        job_payload: dict | None = None,
+    ) -> tuple[bool, int | None]:
         """Atomically check idempotency, insert dispute, and enqueue job.
 
         Returns (was_already_present, job_id).
@@ -270,17 +275,19 @@ class SQLiteRepository:
                     ),
                 )
 
-                cursor = conn.execute(
-                    """INSERT INTO jobs
-                       (job_type, dispute_id, payload, status, created_at, updated_at)
-                       VALUES (?, ?, ?, 'pending', ?, ?)""",
-                    (
-                        job_type, row["dispute_id"],
-                        json.dumps(job_payload),
-                        row["ingested_at"], row["ingested_at"],
-                    ),
-                )
-                job_id = cursor.lastrowid
+                job_id = None
+                if job_type is not None:
+                    cursor = conn.execute(
+                        """INSERT INTO jobs
+                           (job_type, dispute_id, payload, status, created_at, updated_at)
+                           VALUES (?, ?, ?, 'pending', ?, ?)""",
+                        (
+                            job_type, row["dispute_id"],
+                            json.dumps(job_payload or {}),
+                            row["ingested_at"], row["ingested_at"],
+                        ),
+                    )
+                    job_id = cursor.lastrowid
 
             return False, job_id
         finally:

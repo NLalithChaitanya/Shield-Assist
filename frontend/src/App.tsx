@@ -2,7 +2,7 @@
  * App — root component with routing, auth, and React Query provider.
  */
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import AppShell from './components/layout/AppShell';
@@ -25,13 +25,22 @@ const queryClient = new QueryClient({
 });
 
 export default function App() {
-  const [authenticated, setAuthenticated] = useState(false);
+  // Session-only auth: fresh browser sessions start at login; refresh within
+  // the same tab keeps the user signed in (needed for dispute deep links).
+  const [authenticated, setAuthenticated] = useState(
+    () => sessionStorage.getItem('shield-auth') === 'true',
+  );
+
+  // Drop legacy persistent auth from earlier builds / E2E runs
+  useEffect(() => {
+    localStorage.removeItem('shield-auth');
+  }, []);
 
   if (!authenticated) {
     return (
       <QueryClientProvider client={queryClient}>
         <LoginPage onLogin={() => {
-          localStorage.setItem('shield-auth', 'true');
+          sessionStorage.setItem('shield-auth', 'true');
           setAuthenticated(true);
         }} />
       </QueryClientProvider>

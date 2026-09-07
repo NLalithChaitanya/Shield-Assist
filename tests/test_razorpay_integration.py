@@ -780,3 +780,147 @@ class TestIntegrationEndpoints:
         assert r.status_code == 200
         data = r.json()
         assert "authenticated" in data
+
+
+# ===========================================================================
+# 11. INCOMPLETE CASE UPLOAD + CACHE-HIT TESTS
+# ===========================================================================
+
+class TestIncompleteCaseUpload:
+    """Upload → document.process → score.case for incomplete disputes."""
+
+    _PDF = PROJECT_ROOT / "data" / "test_customer_comm.pdf"
+    _FACTS = json.dumps({
+        "amount_paise": "4200000",
+        "event_date": "2026-08-22",
+        "customer_name": "Rahul Sharma",
+        "order_id": "ORD_SIM_001",
+    })
+
+    def _wait_for(self, client, dispute_id: str, predicate, timeout: float = 15.0):
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            r = client.get(f"/disputes/{dispute_id}")
+            assert r.status_code == 200
+            data = r.json()
+            if data.get("scores") and predicate(data):
+                return data
+            time.sleep(0.15)
+        raise TimeoutError(f"Timed out waiting for dispute {dispute_id}")
+
+    def test_upload_missing_evidence_recalculates_scores(self, temp_db):
+        """Uploading a required slot increases completeness only after facts exist."""
+        with TestClient(temp_db["app"]) as client:
+            r = client.post("/api/dev/simulate/razorpay/dispute?scenario=incomplete")
+            assert r.status_code == 200
+            dispute_id = r.json()["dispute_id"]
+
+            initial = self._wait_for(
+                client, dispute_id,
+                lambda d: len(d["scores"]["missing_required_slots"]) == 2,
+            )
+            assert set(initial["scores"]["missing_required_slots"]) == {
+                "customer_communication", "term_and_conditions",
+            }
+            assert initial["scores"]["completeness"] == pytest.approx(33.33, abs=0.1)
+            assert initial["gate"]["passed"] is False
+
+            with open(self._PDF, "rb") as f:
+                up = client.post(
+                    f"/disputes/{dispute_id}/documents",
+                    files={"file": ("customer_comm.pdf", f, "application/pdf")},
+                    data={
+                        "evidence_slot": "customer_communication",
+                        "quality": "clear",
+                        "facts": self._FACTS,
+                    },
+                )
+            assert up.status_code == 200
+
+            after = self._wait_for(
+                client, dispute_id,
+                lambda d: d["scores"]["missing_required_slots"] == ["term_and_conditions"],
+            )
+            assert after["scores"]["completeness"] == pytest.approx(66.67, abs=0.1)
+            assert after["gate"]["passed"] is False
+
+    def test_cache_hit_triggers_rescore_without_ocr(self, temp_db):
+        """Same-file cache reuses facts and still runs score.case."""
+        with TestClient(temp_db["app"]) as client:
+            r1 = client.post("/api/dev/simulate/razorpay/dispute?scenario=incomplete")
+            dispute_a = r1.json()["dispute_id"]
+            self._wait_for(
+                client, dispute_a,
+                lambda d: len(d["scores"]["missing_required_slots"]) == 2,
+            )
+
+            with open(self._PDF, "rb") as f:
+                seed = client.post(
+                    f"/disputes/{dispute_a}/documents",
+                    files={"file": ("seed.pdf", f, "application/pdf")},
+                    data={
+                        "evidence_slot": "customer_communication",
+                        "quality": "clear",
+                        "facts": self._FACTS,
+                    },
+                )
+            assert seed.status_code == 200
+            self._wait_for(
+                client, dispute_a,
+                lambda d: d["scores"]["missing_required_slots"] == ["term_and_conditions"],
+            )
+
+            # Same-dispute cache hit (identical file bytes, different slot)
+            with open(self._PDF, "rb") as f:
+                cached = client.post(
+                    f"/disputes/{dispute_a}/documents",
+                    files={"file": ("seed_copy.pdf", f, "application/pdf")},
+                    data={
+                        "evidence_slot": "term_and_conditions",
+                        "quality": "clear",
+                        "facts": "{}",
+                    },
+                )
+            assert cached.status_code == 200
+            cached_data = cached.json()
+            assert cached_data["ocr_skipped"] is True
+            assert cached_data["cached_from"] is not None
+
+            final_a = self._wait_for(
+                client, dispute_a,
+                lambda d: d["scores"]["missing_required_slots"] == [],
+            )
+            assert final_a["scores"]["completeness"] == pytest.approx(100.0, abs=0.1)
+
+            # Cross-dispute cache hit
+            r2 = client.post("/api/dev/simulate/razorpay/dispute?scenario=incomplete")
+            dispute_b = r2.json()["dispute_id"]
+            self._wait_for(
+                client, dispute_b,
+                lambda d: len(d["scores"]["missing_required_slots"]) == 2,
+            )
+
+            with open(self._PDF, "rb") as f:
+                cross = client.post(
+                    f"/disputes/{dispute_b}/documents",
+                    files={"file": ("seed.pdf", f, "application/pdf")},
+                    data={
+                        "evidence_slot": "customer_communication",
+                        "quality": "clear",
+                        "facts": "{}",
+                    },
+                )
+            assert cross.status_code == 200
+            cross_data = cross.json()
+            assert cross_data["ocr_skipped"] is True
+
+            after_b = self._wait_for(
+                client, dispute_b,
+                lambda d: d["scores"]["missing_required_slots"] == ["term_and_conditions"],
+            )
+            comm_docs = [
+                d for d in after_b["documents"]
+                if d["evidence_slot"] == "customer_communication"
+            ]
+            assert len(comm_docs) == 1
+            assert comm_docs[0]["facts"]
